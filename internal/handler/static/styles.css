@@ -1,0 +1,304 @@
+/* Every knob lives in this one block. The canvas colours (guides, ink) are read
+   from these same properties by app.js, so the page and the drawing stay in step. */
+:root {
+  color-scheme: light;
+
+  /* Paper and ink. Light only for now: a practice sheet is meant to look like paper. */
+  --paper: #fbf8f1;
+  --paper-sunk: #f2ede1;
+  --ink: #1d1f22;
+  --ink-soft: #4b5058;
+  --ink-faint: #868c94;
+  --rule: #e2dccd;
+  --accent: #1f3a5f;
+  --accent-ink: #fff;
+
+  /* Canvas colours. */
+  --guide-strong: #9fb4cf;
+  --guide-faint: #d6dfeb;
+  --model-ink: #2a2c30;
+  --pen-ink: #14213d;
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* --ref-font is set by the generated font.css from FONT_FAMILY. */
+
+  --text: clamp(1rem, 0.95rem + 0.2vw, 1.1rem);
+  --title-page: clamp(1.6rem, 1.3rem + 1.5vw, 2.4rem);
+
+  --gap-xs: 0.35rem;
+  --gap-sm: 0.7rem;
+  --gap-md: 1.2rem;
+  --gap-lg: 2rem;
+
+  --radius: 8px;
+  --measure: 62ch;
+  --page: 1100px;
+  --tap: 44px; /* minimum touch target */
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  font: var(--text)/1.5 var(--font);
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.inner {
+  max-width: var(--page);
+  margin-inline: auto;
+  padding-inline: max(var(--gap-md), env(safe-area-inset-left));
+}
+
+h1 {
+  font-size: var(--title-page);
+  line-height: 1.15;
+  text-wrap: balance;
+  margin: var(--gap-lg) 0 var(--gap-sm);
+}
+
+p { max-width: var(--measure); }
+.lede { color: var(--ink-soft); margin-top: 0; }
+
+a { color: var(--accent); }
+
+.site-header {
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-sunk);
+
+  .inner { display: flex; align-items: center; min-height: 3.25rem; }
+}
+
+.brand {
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+/* ---- Worksheet list ---------------------------------------------------- */
+
+.sheet-list {
+  list-style: none;
+  margin: var(--gap-md) 0 var(--gap-lg);
+  padding: 0;
+  display: grid;
+  gap: var(--gap-sm);
+  grid-template-columns: repeat(auto-fill, minmax(clamp(14rem, 40vw, 20rem), 1fr));
+
+  a {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-xs);
+    padding: var(--gap-md);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: #fff;
+    color: inherit;
+    text-decoration: none;
+
+    &:hover { border-color: var(--guide-strong); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  }
+}
+
+.sheet-title { font-weight: 600; }
+
+.sheet-sample {
+  font-family: var(--ref-font), cursive;
+  font-size: 1.4rem;
+  color: var(--ink-soft);
+}
+
+/* ---- Toolbar ------------------------------------------------------------- */
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in oklab, var(--paper-sunk), transparent 6%);
+  border-bottom: 1px solid var(--rule);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.toolbar-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm) var(--gap-md);
+  padding-block: var(--gap-sm);
+}
+
+.segmented {
+  display: inline-flex;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #fff;
+
+  legend {
+    /* Visually hidden but still announced. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  label {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--tap);
+    padding-inline: var(--gap-md);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+
+    + label { border-left: 1px solid var(--rule); }
+    &:has(:checked) { background: var(--accent); color: var(--accent-ink); }
+    &:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: -4px; }
+  }
+
+  input { position: absolute; opacity: 0; pointer-events: none; }
+}
+
+.field, .check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  min-height: var(--tap);
+  font-size: 0.95rem;
+  color: var(--ink-soft);
+
+  &[hidden] { display: none; }
+}
+
+.field input[type="range"] { width: 6rem; accent-color: var(--accent); }
+.field output { min-width: 3ch; font-variant-numeric: tabular-nums; }
+.field abbr { text-decoration: none; }
+.check input { width: 1.3rem; height: 1.3rem; accent-color: var(--accent); }
+
+/* ---- Practice rows ------------------------------------------------------- */
+
+.rows {
+  list-style: none;
+  margin: var(--gap-md) 0;
+  padding: 0;
+  display: grid;
+  gap: var(--gap-lg);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "ref     ref"
+    "practice actions";
+  gap: var(--gap-xs) var(--gap-sm);
+  align-items: start;
+}
+
+.band {
+  position: relative;
+  border-radius: var(--radius);
+  /* app.js sets the height from the x-height; this is the pre-script size. */
+  min-height: 6rem;
+
+  canvas { display: block; width: 100%; height: 100%; }
+}
+
+.reference {
+  grid-area: ref;
+
+  canvas { position: absolute; inset: 0; }
+}
+
+/* The model is drawn on the canvas so it can sit exactly on the guides. The
+   text stays in the page for screen readers, and is shown as a fallback
+   until the script has drawn it. */
+.model {
+  margin: 0;
+  padding: 1.5rem var(--gap-sm);
+  font: 2.5rem/1 var(--ref-font), cursive;
+  color: var(--model-ink);
+  max-width: none;
+}
+
+.js-ready .model {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.practice {
+  grid-area: practice;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--rule);
+
+  canvas {
+    /* The Pencil must never scroll, zoom, select or magnify. Fingers scroll
+       the page from script instead (see web/pen.ts). */
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.row-actions {
+  grid-area: actions;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+}
+
+button {
+  min-height: var(--tap);
+  min-width: 4.5rem;
+  padding: 0 var(--gap-md);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+  touch-action: manipulation;
+
+  &:hover:not(:disabled) { background: color-mix(in oklab, #fff, var(--accent) 8%); }
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  &:disabled { color: var(--ink-faint); cursor: default; }
+}
+
+/* On a narrow screen the buttons go under the line, so the practice band keeps
+   the full width. */
+@media (max-width: 600px) {
+  /* On a phone the toolbar would cover a third of the screen if it stuck. */
+  .toolbar { position: static; }
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "ref" "practice" "actions";
+  }
+  .row-actions { flex-direction: row; justify-content: flex-end; }
+  .field input[type="range"] { width: 5.5rem; }
+}
+
+.back { margin-block: var(--gap-lg); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

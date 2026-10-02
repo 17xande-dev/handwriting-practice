@@ -1,0 +1,53 @@
+{{define "content"}}
+<form class="toolbar" id="toolbar" aria-label="Pen settings">
+  <div class="inner toolbar-inner">
+    <fieldset class="segmented">
+      <legend>Pen</legend>
+      <label><input type="radio" name="pen" value="monoline" checked> Monoline</label>
+      <label><input type="radio" name="pen" value="edged"> Edged nib</label>
+    </fieldset>
+    <label class="field" data-pen="monoline">Weight
+      <input type="range" name="weight" min="1" max="5" step="1" value="3">
+    </label>
+    <label class="field" data-pen="edged" hidden><abbr title="Nib widths per x-height">x-height</abbr>
+      <input type="range" name="nibs" min="3" max="8" step="0.5" value="5">
+      <output name="nibsOut">5 nibs</output>
+    </label>
+    <label class="field" data-pen="edged" hidden>Angle
+      <input type="range" name="angle" min="20" max="60" step="5" value="45">
+      <output name="angleOut">45°</output>
+    </label>
+    <fieldset class="segmented">
+      <legend>Size</legend>
+      <label><input type="radio" name="size" value="s"> S</label>
+      <label><input type="radio" name="size" value="m" checked> M</label>
+      <label><input type="radio" name="size" value="l"> L</label>
+    </fieldset>
+    <label class="check"><input type="checkbox" name="finger"> Finger draws</label>
+  </div>
+</form>
+
+<div class="inner">
+  <h1>{{.Sheet.Title}}</h1>
+  <p class="lede">{{.Sheet.Note}}</p>
+
+  <ol class="rows" id="rows">
+    {{- range $i, $line := .Sheet.Lines}}
+    <li class="row">
+      <div class="band reference">
+        <canvas aria-hidden="true"></canvas>
+        <p class="model">{{$line}}</p>
+      </div>
+      <div class="band practice">
+        <canvas aria-label="Practice line {{inc $i}}: copy “{{$line}}”"></canvas>
+      </div>
+      <div class="row-actions">
+        <button type="button" data-action="undo" disabled>Undo</button>
+        <button type="button" data-action="clear" disabled>Clear</button>
+      </div>
+    </li>
+    {{- end}}
+  </ol>
+  <p class="back"><a href="/">All worksheets</a></p>
+</div>
+{{end}}

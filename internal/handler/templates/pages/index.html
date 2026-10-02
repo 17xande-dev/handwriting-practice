@@ -1,0 +1,16 @@
+{{define "content"}}
+<div class="inner">
+  <h1>Worksheets</h1>
+  <p class="lede">Copy each model on the ruled line beneath it. Write with the Apple Pencil. Your finger scrolls the page.</p>
+  <ol class="sheet-list">
+    {{- range .Sheets}}
+    <li>
+      <a href="/sheet/{{.Slug}}">
+        <span class="sheet-title">{{.Title}}</span>
+        <span class="sheet-sample">{{index .Lines 0}}</span>
+      </a>
+    </li>
+    {{- end}}
+  </ol>
+</div>
+{{end}}
