@@ -1,0 +1,20 @@
+{{define "content"}}
+<div class="inner">
+  <h1>Your own text</h1>
+  <p class="lede">Type or paste what you'd like to practise. Each line becomes a model to copy, and long lines are wrapped for you.</p>
+  <form class="custom-form" method="post" action="/practice">
+    {{- with .Error}}
+    <p class="error" role="alert">{{.}}</p>
+    {{- end}}
+    <label for="custom-text">Text</label>
+    <textarea id="custom-text" name="text" rows="8" maxlength="{{.MaxRunes}}" required
+      autocapitalize="off" autocorrect="off" spellcheck="false"
+      placeholder="a quick brown fox&#10;minimum">{{.Text}}</textarea>
+    <p class="hint">Up to {{.MaxRunes}} characters. Nothing is saved on the server; this device remembers your last text.</p>
+    <div class="form-actions">
+      <button type="submit" class="primary">Make worksheet</button>
+      <a href="/">Back to worksheets</a>
+    </div>
+  </form>
+</div>
+{{end}}

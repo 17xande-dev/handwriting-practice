@@ -1,16 +1,20 @@
 // Pointer Events input for the worksheet.
 //
-// The writing area (every row) is taken over from the browser: it has
-// `touch-action: none` and no text selection, so nothing Safari would do with
-// a touch there (scroll, zoom, select, magnify) can happen while the hand
-// rests on the glass. Instead:
+// The writing area (everything below the toolbar) is taken over from the
+// browser: it has `touch-action: none` and no text selection, so nothing
+// Safari would do with a touch there (scroll, zoom, select, magnify) can
+// happen while the hand rests on the glass. Instead:
 //
 //  - the Pencil writes on a practice line, and does nothing anywhere else;
-//  - a finger scrolls the page, from script, with momentum;
-//  - a palm (a broad contact, or any touch that lands while or just after the
-//    Pencil is writing) does nothing at all.
+//  - two fingers scroll the page, from script, with momentum;
+//  - a single touch does nothing, so a resting palm is harmless.
 //
-// "Finger draws" in the toolbar lets touch and mouse write too, for testing.
+// Contact size can't separate a palm from a finger: Safari reports fingertips
+// 63–125px across on an iPad Air. Requiring two fingers to scroll is what
+// makes a palm safe, as in most drawing apps.
+//
+// "Finger draws" in the toolbar lets one finger (or a mouse) write instead,
+// for testing on a desktop.
 
 /** A raw sample in canvas CSS pixels. */
 export interface Sample {
@@ -31,12 +35,8 @@ export interface PenHandlers {
   end(): void;
 }
 
-/** A touch that lands this soon after the Pencil was last on the glass is a palm. */
+/** Touches that land this soon after the Pencil was last on the glass are a palm. */
 const palmGuardMs = 500;
-/** A contact this many CSS pixels across is a palm or the side of a hand, not a fingertip. */
-const palmContactPx = 40;
-/** A finger must move this far before it scrolls, so a resting hand doesn't nudge the page. */
-const scrollSlopPx = 8;
 
 let lastPenActivity = -Infinity;
 
@@ -101,12 +101,14 @@ export function attachPen(canvas: HTMLCanvasElement, h: PenHandlers): void {
 
 /**
  * Take the writing area over from the browser: no selection, no native
- * gestures, finger scrolling from script, palms ignored.
+ * gestures, two-finger scrolling from script, single touches ignored.
  */
 export function attachWritingArea(area: HTMLElement, touchWrites: () => boolean): void {
-  let scroll:
-    | { id: number; x: number; y: number; started: boolean; trail: Array<[number, number]> }
-    | null = null;
+  // Every touch currently down in the area, and where it last was.
+  const touches = new Map<number, { x: number; y: number }>();
+  // Scroll state while two or more fingers are down: the centroid it last
+  // scrolled from, and recent centroid positions for the momentum on release.
+  let pan: { x: number; y: number; trail: Array<[number, number]> } | null = null;
   let glide = 0; // requestAnimationFrame id of the momentum animation
 
   const stopGlide = () => {
@@ -114,26 +116,50 @@ export function attachWritingArea(area: HTMLElement, touchWrites: () => boolean)
     glide = 0;
   };
 
-  const isPalm = (e: PointerEvent) =>
-    e.timeStamp - lastPenActivity < palmGuardMs ||
-    e.width > palmContactPx || e.height > palmContactPx;
+  const centroid = () => {
+    let x = 0, y = 0;
+    for (const t of touches.values()) {
+      x += t.x;
+      y += t.y;
+    }
+    return { x: x / touches.size, y: y / touches.size };
+  };
+
+  /** Start, or restart from the current centroid when a finger is added or lifted. */
+  const repan = () => {
+    if (touches.size < 2 || performance.now() - lastPenActivity < palmGuardMs) {
+      pan = null;
+      return;
+    }
+    const c = centroid();
+    pan = { x: c.x, y: c.y, trail: pan?.trail ?? [] };
+    // Only a scroll captures its fingers, so they keep scrolling wherever they
+    // go. A single finger is never captured: a capturing element receives the
+    // click, which would stop a tap on Undo, Clear or a link from working.
+    for (const id of touches.keys()) {
+      try {
+        area.setPointerCapture(id);
+      } catch {
+        // Synthetic or already-gone pointer.
+      }
+    }
+  };
 
   area.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "pen") {
       lastPenActivity = e.timeStamp;
-      // A palm that touched down first and started a scroll stops the moment
-      // the Pencil lands, and any stray selection goes.
-      scroll = null;
+      // The Pencil landing ends any scroll, and clears any stray selection.
+      pan = null;
       stopGlide();
       getSelection()?.removeAllRanges();
       // The Pencil only writes on a practice line; anywhere else it does nothing.
       e.preventDefault();
       return;
     }
-    if (e.defaultPrevented || e.pointerType !== "touch" || touchWrites()) return;
+    if (e.pointerType !== "touch" || (e.defaultPrevented && touchWrites())) return;
     stopGlide();
-    if (scroll || isPalm(e)) return;
-    scroll = { id: e.pointerId, x: e.clientX, y: e.clientY, started: false, trail: [] };
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    repan();
   });
 
   area.addEventListener("pointermove", (e) => {
@@ -141,33 +167,32 @@ export function attachWritingArea(area: HTMLElement, touchWrites: () => boolean)
       lastPenActivity = e.timeStamp;
       return;
     }
-    if (!scroll || e.pointerId !== scroll.id) return;
-    // A hand that turns out to be a palm (it grew, or the Pencil came down)
-    // stops scrolling where it is.
-    if (isPalm(e)) {
-      scroll = null;
-      return;
-    }
-    const dx = scroll.x - e.clientX;
-    const dy = scroll.y - e.clientY;
-    if (!scroll.started && Math.hypot(dx, dy) < scrollSlopPx) return;
-    scroll.started = true;
-    globalThis.scrollBy(dx, dy);
-    scroll.x = e.clientX;
-    scroll.y = e.clientY;
-    scroll.trail.push([e.timeStamp, e.clientY]);
-    if (scroll.trail.length > 6) scroll.trail.shift();
+    const t = touches.get(e.pointerId);
+    if (!t) return;
+    t.x = e.clientX;
+    t.y = e.clientY;
+    if (!pan) return;
+    const c = centroid();
+    globalThis.scrollBy(pan.x - c.x, pan.y - c.y);
+    pan.x = c.x;
+    pan.y = c.y;
+    pan.trail.push([e.timeStamp, c.y]);
+    if (pan.trail.length > 8) pan.trail.shift();
   });
 
   const release = (e: PointerEvent) => {
-    if (!scroll || e.pointerId !== scroll.id) return;
-    const { trail, started } = scroll;
-    scroll = null;
-    if (!started || trail.length < 2 || e.type === "pointercancel") return;
+    if (!touches.delete(e.pointerId)) return;
+    if (touches.size >= 2) {
+      repan(); // three fingers down to two: keep scrolling from the new centroid
+      return;
+    }
+    const trail = pan?.trail ?? [];
+    pan = null;
+    if (e.type === "pointercancel" || trail.length < 2) return;
     // Carry on in the direction of the flick, slowing down, like native scrolling.
     const [t0, y0] = trail[0];
     const [t1, y1] = trail[trail.length - 1];
-    if (e.timeStamp - t1 > 80) return; // the finger had stopped before lifting
+    if (e.timeStamp - t1 > 80) return; // the fingers had stopped before lifting
     let v = (y0 - y1) / Math.max(1, t1 - t0); // px per ms, positive scrolls down
     let last = performance.now();
     const step = (now: number) => {

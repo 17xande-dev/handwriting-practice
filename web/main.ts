@@ -36,8 +36,32 @@ function measureFont(family: string, slant: number): FontInfo {
   };
 }
 
+/**
+ * Remember the last custom text on this device, so coming back to the form
+ * doesn't mean pasting it again. Prefill only an empty box: text arriving in
+ * the URL (from "Edit this text") wins.
+ */
+function rememberCustomText() {
+  const box = document.getElementById("custom-text");
+  if (!(box instanceof HTMLTextAreaElement)) return;
+  const key = "italic-practice:custom-text";
+  try {
+    if (!box.value) box.value = localStorage.getItem(key) ?? "";
+  } catch {
+    // Storage unavailable: nothing to restore.
+  }
+  box.form?.addEventListener("submit", () => {
+    try {
+      localStorage.setItem(key, box.value);
+    } catch {
+      // Not remembered; the worksheet still works.
+    }
+  });
+}
+
 function main() {
   document.documentElement.classList.add("js-ready");
+  rememberCustomText();
   const form = document.getElementById("toolbar");
   const rowsEl = document.getElementById("rows");
   if (!(form instanceof HTMLFormElement) || !rowsEl) return;

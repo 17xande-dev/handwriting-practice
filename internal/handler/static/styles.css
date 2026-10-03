@@ -404,11 +404,66 @@ button {
   .slider input[type="range"] { width: 5.5rem; }
 }
 
-.back { margin-block: var(--gap-lg); }
+.back {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-md);
+  margin-block: var(--gap-lg);
+
+  form { margin: 0; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ---- Your own text ------------------------------------------------------- */
+
+.sheet-list .own a {
+  border-style: dashed;
+  background: transparent;
+}
+
+.custom-form {
+  display: grid;
+  gap: var(--gap-sm);
+  max-width: var(--measure);
+  margin-bottom: var(--gap-lg);
+
+  label { font-weight: 600; }
+
+  textarea {
+    width: 100%;
+    min-height: 12rem;
+    padding: var(--gap-sm);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: #fff;
+    color: var(--ink);
+    font: 1.5rem/1.4 var(--ref-font);
+    resize: vertical;
+
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  }
+
+  .hint { margin: 0; font-size: 0.9rem; color: var(--ink-soft); }
+  .error { margin: 0; color: #9b2c2c; font-weight: 600; }
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-md);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+
+  &:hover:not(:disabled) { background: color-mix(in oklab, var(--accent), black 12%); }
 }

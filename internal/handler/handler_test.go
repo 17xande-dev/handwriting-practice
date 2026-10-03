@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,7 +37,7 @@ func get(t *testing.T, h http.Handler, target string) (*http.Response, string) {
 // servedPages is every HTML page the app serves, so the page-wide rules below
 // cover a worksheet added tomorrow without anyone remembering to list it.
 func servedPages() []string {
-	p := []string{"/", "/sheet/no-such-sheet"}
+	p := []string{"/", "/sheet/no-such-sheet", "/practice/new"}
 	for _, s := range sheets.All() {
 		p = append(p, "/sheet/"+s.Slug)
 	}
@@ -232,6 +233,106 @@ func TestFontStylesheetCarriesFamilies(t *testing.T) {
 	for _, f := range fonts.Builtin {
 		if !strings.Contains(css, "--font-"+f.ID+`: "`+f.Family+`"`) {
 			t.Errorf("font.css lacks %s:\n%s", f.ID, css)
+		}
+	}
+}
+
+func post(t *testing.T, h http.Handler, target, text string) (*http.Response, string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(url.Values{"text": {text}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	res := rec.Result()
+	body, _ := io.ReadAll(res.Body)
+	return res, string(body)
+}
+
+func TestCustomWorksheet(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	text := "minimum\nthe quick brown fox jumps over the lazy dog"
+	res, body := post(t, h, "/practice", text)
+	if res.StatusCode != 200 {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	for _, line := range []string{"minimum", "the quick brown fox jumps", "over the lazy dog"} {
+		if !strings.Contains(body, `<p class="model">`+line+`</p>`) {
+			t.Errorf("missing model line %q", line)
+		}
+	}
+	// The custom worksheet passes the inline-markup rules like every other page.
+	for name, re := range map[string]*regexp.Regexp{"style": inlineStyle, "handler": inlineHandler, "script": inlineScript} {
+		if m := re.FindString(body); m != "" {
+			t.Errorf("custom worksheet has inline %s: %s", name, m)
+		}
+	}
+	// "Edit this text" posts the original text back to the form intact.
+	m := regexp.MustCompile(`<input type="hidden" name="text" value="([^"]*)">`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("no edit form")
+	}
+	_, form := post(t, h, "/practice/new", html.UnescapeString(m[1]))
+	if !strings.Contains(form, ">"+text+"</textarea>") {
+		t.Error("edit form not prefilled with the original text")
+	}
+}
+
+// The user's text must never travel in a URL: it would land in history, logs
+// and Referer headers, and a crafted link could put words in front of them.
+func TestCustomTextNeverInURL(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	for _, u := range []string{"/practice", "/practice?text=hello"} {
+		res, body := get(t, h, u)
+		if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/practice/new" {
+			t.Errorf("GET %s: status %d, Location %q", u, res.StatusCode, res.Header.Get("Location"))
+		}
+		if strings.Contains(body, "hello") {
+			t.Errorf("GET %s rendered text from the URL", u)
+		}
+	}
+	if _, body := get(t, h, "/practice/new?text=hello"); strings.Contains(body, "hello") {
+		t.Error("GET /practice/new prefilled the form from the URL")
+	}
+	_, form := get(t, h, "/practice/new")
+	if !strings.Contains(form, `method="post" action="/practice"`) {
+		t.Error("the text form does not POST")
+	}
+	res, body := post(t, h, "/practice", "an in un")
+	if res.Header.Get("Cache-Control") != "no-store" {
+		t.Errorf("custom worksheet Cache-Control %q", res.Header.Get("Cache-Control"))
+	}
+	if strings.Contains(body, "?text=") {
+		t.Error("custom worksheet links the text in a URL")
+	}
+}
+
+func TestCustomWorksheetWithoutTextShowsForm(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	for _, text := range []string{"", "  \n\t "} {
+		res, body := post(t, h, "/practice", text)
+		if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, `role="alert"`) {
+			t.Errorf("%q: status %d, no error shown", text, res.StatusCode)
+		}
+	}
+}
+
+func TestCustomRefusesOversizedBody(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	res, _ := post(t, h, "/practice", strings.Repeat("a", maxCustomBody))
+	if res.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("status %d", res.StatusCode)
+	}
+}
+
+// The text is the user's own, so it must render as text in both the
+// worksheet and the form.
+func TestCustomTextIsEscaped(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	evil := `<script>alert(1)</script><img src=x onerror=alert(2)>"><b>`
+	for _, u := range []string{"/practice", "/practice/new"} {
+		_, body := post(t, h, u, evil)
+		if strings.Contains(body, "<script>alert") || strings.Contains(body, "<img src=x") || strings.Contains(body, `"><b>`) {
+			t.Errorf("POST %s: unescaped user text in page", u)
 		}
 	}
 }

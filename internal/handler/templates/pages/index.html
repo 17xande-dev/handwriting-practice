@@ -1,7 +1,7 @@
 {{define "content"}}
 <div class="inner">
   <h1>Worksheets</h1>
-  <p class="lede">Copy each model on the ruled line beneath it. Write with the Apple Pencil. Your finger scrolls the page.</p>
+  <p class="lede">Copy each model on the ruled line beneath it. Write with the Apple Pencil; scroll with two fingers.</p>
   <ol class="sheet-list">
     {{- range .Sheets}}
     <li>
@@ -11,6 +11,12 @@
       </a>
     </li>
     {{- end}}
+    <li class="own">
+      <a href="/practice/new">
+        <span class="sheet-title">Your own text</span>
+        <span class="sheet-sample">type or paste anything…</span>
+      </a>
+    </li>
   </ol>
 </div>
 {{end}}

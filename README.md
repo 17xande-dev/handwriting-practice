@@ -35,12 +35,17 @@ change the TypeScript: the bundle is checked in, so `go build` alone works.
 
 All of it is in `web/pen.ts`, using Pointer Events:
 
-- Only `pointerType === "pen"` writes, so a resting palm can't make marks.
-  The canvas has `touch-action: none`, which stops the Pencil scrolling the
-  page mid-stroke; finger drags over a canvas are turned back into scrolling by
-  script. A touch that starts during or just after a pen stroke is treated as
-  a palm and ignored. "Finger draws" in the toolbar lets touch and mouse write
-  too, for testing on a desktop.
+- Everything below the toolbar is one writing area that the app handles
+  itself. It has `touch-action: none` and no text selection, so a hand resting
+  on the glass can't scroll, zoom or select anything. There:
+  - only `pointerType === "pen"` writes, and only on a practice line;
+  - **two fingers scroll**, with momentum;
+  - **one finger does nothing**, so a resting palm is harmless. Contact size
+    can't tell a palm from a finger: Safari reports fingertips 63–125px wide
+    on an iPad Air, as measured on the device;
+  - touches landing within 500ms of the Pencil are ignored as a palm;
+  - "Finger draws" in the toolbar lets one finger or a mouse write, for
+    testing on a desktop.
 - `getCoalescedEvents()` recovers the Pencil's full sample rate (up to 240Hz)
   between frames; `getPredictedEvents()`, where the browser has it, draws a
   short predicted tail to hide a frame of latency.
@@ -85,6 +90,18 @@ The Content-Security-Policy is built from the catalogue: `style-src` and
 `fonts.Validate` runs at startup and is the gate user-supplied fonts will
 have to pass.
 
+### Your own text
+
+"Your own text" on the index takes typed or pasted text and turns each line
+into a model, wrapping long lines at 28 characters and dropping control and
+invisible characters (`sheets.Custom`). The text only ever travels in a POST
+body, never in a URL: a URL would put it in browser history, server and proxy
+logs and Referer headers, and would let someone else craft a link that puts
+words in front of you. Nothing is stored on the server, the pages carrying
+the text are sent `Cache-Control: no-store`, and "Edit this text" posts it
+back to the form. The device remembers the last text in local storage, so
+the form isn't empty next time. There is no sharing, by design.
+
 ## Security
 
 - The CSP has no `unsafe-inline`. Templates carry no `style=` attributes, no
@@ -99,6 +116,7 @@ have to pass.
 
 | Decision | Candidates | What would force it |
 |---|---|---|
+| Sharing a custom exercise | A server-stored exercise behind an unguessable id, perhaps with an owner | Wanting to send an exercise to someone. Putting the text in the URL was rejected (see "Your own text"). |
 | Saving practice | IndexedDB on the device; SQLite on the server | Wanting history, or work surviving a reload |
 | User-chosen fonts | A per-user entry in the catalogue | That feature. The CSP is built per catalogue, so user-supplied origins need checking against an allow-list (for example, Google Fonts only), not trusting. |
 | Stroke-order models | Hand-authored SVG paths per letter | Wanting animated stroke order or direction arrows, which a font can't give |
