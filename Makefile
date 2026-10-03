@@ -1,4 +1,4 @@
-.PHONY: run bundle build test vet fmt check up down
+.PHONY: run bundle build test vet fmt check up down fonts-fetch
 
 ADDR ?= :8080
 
@@ -44,3 +44,20 @@ up:
 
 down:
 	docker compose down
+
+BRIEM_ZIP_URL = https://github.com/SorkinType/Briem-Hand/releases/download/v1.004/Briem-Hand-v1.004.zip
+BRIEM_ZIP_SHA = e0cf3591c5f9f5bf4ee20d177ec6d6948b9026b3fc7a87c0d68ee6d880b4bc90
+
+## fonts-fetch: re-download the vendored Briem fonts from their pinned release and verify them
+fonts-fetch:
+	@tmp=$$(mktemp -d) && trap 'rm -rf $$tmp' EXIT && \
+	  curl -fsSL -o $$tmp/briem.zip $(BRIEM_ZIP_URL) && \
+	  echo "$(BRIEM_ZIP_SHA)  $$tmp/briem.zip" | sha256sum -c --quiet && \
+	  unzip -q -j -o $$tmp/briem.zip \
+	    Briem-Hand-v1.004/fonts/ttf/BriemHand-Regular.ttf \
+	    Briem-Hand-v1.004/fonts/ttf/BriemHandUnjoined-Regular.ttf -d internal/handler/static/fonts && \
+	  unzip -q -j -o $$tmp/briem.zip Briem-Hand-v1.004/OFL.txt -d third_party/briem-hand && \
+	  cd internal/handler/static/fonts && \
+	  echo "bcdfb43ec76937853dc046cb31743658698251036f6cff254351292230ce194c  BriemHand-Regular.ttf" | sha256sum -c --quiet && \
+	  echo "664fce9b4abaf6c9c448d3e5ade3ce058ea5ded8d1809e554a0f64a076d87b3f  BriemHandUnjoined-Regular.ttf" | sha256sum -c --quiet && \
+	  echo "Briem fonts verified"

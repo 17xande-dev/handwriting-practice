@@ -29,10 +29,14 @@ type Server struct {
 
 // page is the data every template receives.
 type page struct {
-	Title  string
-	Fonts  []fonts.Font
-	Sheets []sheets.Sheet
-	Sheet  sheets.Sheet
+	Title string
+	Fonts []fonts.Font
+	// Groups is the catalogue as the picker shows it: family tiles, each with
+	// its variant chips. Default is the variant a worksheet opens with.
+	Groups  []fonts.Group
+	Default string
+	Sheets  []sheets.Sheet
+	Sheet   sheets.Sheet
 	// Text is the user's own exercise text, on the custom pages.
 	Text string
 	// Custom marks a worksheet made from the user's text, which gets an
@@ -48,10 +52,17 @@ func New(fontList []fonts.Font, log *slog.Logger) (http.Handler, error) {
 	if err := fonts.Validate(fontList); err != nil {
 		return nil, err
 	}
-	a, err := loadAssets(map[string][]byte{"font.css": fonts.CSS(fontList)})
+	a, err := loadAssets()
 	if err != nil {
 		return nil, err
 	}
+	// font.css names the bundled font files by their hashed URLs, so it is
+	// generated once the other assets are loaded, and then becomes one itself.
+	css, err := fonts.CSS(fontList, a.url)
+	if err != nil {
+		return nil, err
+	}
+	a.add("font.css", css)
 	s := &Server{fonts: fontList, assets: a, log: log}
 	if s.pages, err = parsePages(a); err != nil {
 		return nil, err
@@ -110,6 +121,8 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data pag
 		return
 	}
 	data.Fonts = s.fonts
+	data.Groups = fonts.Groups(s.fonts)
+	data.Default = fonts.DefaultFont(s.fonts).ID
 	var buf bytes.Buffer
 	if err := t.ExecuteTemplate(&buf, "layout.html", data); err != nil {
 		s.log.Error("render", "page", name, "err", err)

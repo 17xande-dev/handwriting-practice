@@ -71,23 +71,37 @@
 </form>
 
 <!-- The model font is chosen here rather than in the sticky toolbar: there
-     are too many to fit there, and it is rarely changed mid-line. The inputs
-     belong to the toolbar form through form="toolbar". -->
+     are too many to fit there, and it is rarely changed mid-line. First a
+     family, then one of its variants. The variant radios belong to the
+     toolbar form through form="toolbar"; the family tiles are only a way of
+     choosing among them, so they aren't part of the form. -->
 <section class="models inner" aria-labelledby="models-heading">
   <h2 id="models-heading">Model</h2>
-  <div class="model-tiles" role="radiogroup" aria-labelledby="models-heading">
-    {{- range $i, $f := .Fonts}}
+  <div class="family-tiles" role="radiogroup" aria-label="Font family">
+    {{- range .Groups}}
     <label class="tile">
-      <input type="radio" form="toolbar" name="model" value="{{.ID}}" data-slant="{{.Slant}}"{{if .Italic}} data-style="italic"{{end}}{{if eq $i 0}} checked{{end}}>
-      <span class="tile-art font-{{.ID}}" aria-hidden="true">an</span>
-      <span class="tile-label">{{.Label}}</span>
+      <input type="radio" name="family" value="{{.Name}}">
+      <span class="tile-art font-{{(index .Fonts 0).ID}}" aria-hidden="true">an</span>
+      <span class="tile-label">{{.Name}}</span>
     </label>
     {{- end}}
     <label class="tile">
-      <input type="radio" form="toolbar" name="model" value="custom">
+      <input type="radio" name="family" value="Google Fonts">
       <span class="tile-art custom-art" id="custom-art" aria-hidden="true">Aa</span>
-      <span class="tile-label">Any Google font</span>
+      <span class="tile-label">Google Fonts</span>
     </label>
+  </div>
+  <div class="variant-chips" role="radiogroup" aria-label="Variant">
+    {{- range .Groups}}{{range .Fonts}}
+    <label class="chip" data-group="{{.Group}}">
+      <input type="radio" form="toolbar" name="model" value="{{.ID}}" data-group="{{.Group}}" data-slant="{{.Slant}}"{{if .Italic}} data-style="italic"{{end}}{{if eq .ID $.Default}} checked{{end}}>
+      <span class="chip-name font-{{.ID}}">{{.Variant}}</span>
+      <span class="chip-note">{{.Note}}</span>
+    </label>
+    {{- end}}{{end}}
+    <!-- Google Fonts has no chips: its family tile selects this, and the
+         panel below names the font. -->
+    <input class="custom-model" type="radio" form="toolbar" name="model" value="custom" data-group="Google Fonts" tabindex="-1" aria-hidden="true">
   </div>
   <div class="custom-font" data-model="custom" hidden>
     <label class="field">Google Fonts family

@@ -70,25 +70,30 @@ and size are all sliders.
 
 ### Model fonts
 
-The model is chosen from the strip above the worksheet title (it doesn't fit
-in the sticky toolbar, and rarely changes mid-line). The models are drawn on
-a canvas, and the guides are placed from the chosen font's measured
-proportions (the heights of "x" and "l", the depth of "p"), so any font sits
-correctly on them. Each model also sets the paper's slant lines.
+The model is chosen from the strip above the worksheet title: first a font
+family, then one of its variants (each chip shows the font's real name,
+written in that font). It's not in the sticky toolbar because there are too
+many, and it rarely changes mid-line. The models are drawn on a canvas, and
+the guides are placed from the chosen font's measured proportions (the
+heights of "x" and "l", the depth of "p"), so any font sits correctly on them.
+Each variant also sets the paper's slant lines.
 
-The catalogue, in `internal/fonts`:
+The catalogue, in `internal/fonts`, in picker order:
 
-| Model | Font | Slant | Why |
+| Family | Variants | Slant | Source |
 |---|---|---|---|
-| Italic (default) | Edu SA Beginner | 5° | A South Australian school hand derived from italic. Of the open-licensed school fonts compared, it was closest to Getty-Dubay basic italic: elliptical bowls, branching arches, exit strokes and a gentle slope. Its f stays on the baseline, whereas Getty-Dubay's descends. It measures 6°; 5° is Getty-Dubay's slope. |
-| Upright | Playwrite US Modern | 0° | An upright school hand. Edu QLD and Playwrite NZ still slope, and Andika is a print face rather than handwriting. |
-| England semi-joined (+ italic) | Playwrite GB S | 0° / 7° | Playwrite England, semi-joined, upright and italic. |
-| England joined (+ italic) | Playwrite GB J | 0° / 7° | Playwrite England, joined, upright and italic. The joins show within words. |
-| Briem hand | Briem Hand | 3.5° | Gunnlaugur Briem's italic handwriting model, with edged-pen thick and thin. The only Briem family on Google Fonts. |
+| Briem Hand | Briem Hand Unjoined (print), Briem Hand (joined) | 3.5° | Bundled from the Briem-Hand v1.004 release; see `third_party/briem-hand/SOURCE.md`. Gunnlaugur Briem's handwriting model. The joins come from the font's contextual alternates. |
+| Edu SA Beginner | Edu SA Beginner (italic), **the default** | 5° | Google Fonts. The Getty-Dubay stand-in: a South Australian school hand derived from italic, with elliptical bowls, branching arches and exit strokes. It measures 6°; 5° is Getty-Dubay's slope. Its f stays on the baseline, whereas Getty-Dubay's descends. |
+| Playwrite GB | GB S (semi-joined), GB S Italic, GB J (joined), GB J Italic | 0° / 7° | Google Fonts. Playwrite England. |
+| Playwrite US | Playwrite US Modern (upright) | 0° | Google Fonts. |
+| Google Fonts | any family, by name | measured | See below. |
 
-All are SIL OFL from Google Fonts; the official Getty-Dubay fonts are
-commercial. The Playwrite GB "Guides" variants, which draw their own ruling,
-are left out because the app rules the paper itself.
+All are SIL OFL. The Guides variants (Playwrite's and Briem's), which draw
+their own ruling, are left out because the app rules the paper itself. The
+bundled Briem faces get their own CSS family names ("Briem Hand Print",
+"Briem Hand Joined"), so a "Briem Hand" loaded through the Google Fonts
+picker can't collide with them. `make fonts-fetch` re-downloads and verifies
+them.
 
 **Any Google font.** The last tile takes a Google Fonts family name and loads
 it in the browser (`web/googlefont.ts`). The name is checked against Google's

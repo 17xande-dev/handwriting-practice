@@ -108,7 +108,7 @@ func TestCSPAllowsConfiguredFontOrigins(t *testing.T) {
 // A catalogue with no remote fonts must not link a stylesheet, and the CSP
 // must allow Google Fonts (for the picker) and nothing else remote.
 func TestLocalCatalogueAllowsOnlyGoogle(t *testing.T) {
-	h := newTestServer(t, []fonts.Font{{ID: "local", Label: "Local", Family: "Local Font"}})
+	h := newTestServer(t, []fonts.Font{{ID: "local", Group: "Local", Variant: "Local", Family: "Local Font", Default: true}})
 	res, body := get(t, h, "/sheet/arches")
 	if strings.Contains(body, "googleapis") {
 		t.Error("page links a remote font stylesheet")
@@ -120,24 +120,71 @@ func TestLocalCatalogueAllowsOnlyGoogle(t *testing.T) {
 	}
 }
 
-// Every catalogue font must be offered on a worksheet, carrying the slant the
-// script draws the paper with, and have its stylesheet linked.
+// Every catalogue font must be offered on a worksheet as a variant chip under
+// its family, carrying the slant the script draws the paper with, and have
+// its stylesheet linked if it comes from one.
 func TestSheetOffersEveryModelFont(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	_, body := get(t, h, "/sheet/arches")
-	for i, f := range fonts.Builtin {
-		want := `value="` + f.ID + `" data-slant="` + strconv.FormatFloat(f.Slant, 'f', -1, 64) + `"`
+	for _, f := range fonts.Builtin {
+		want := `value="` + f.ID + `" data-group="` + f.Group + `" data-slant="` + strconv.FormatFloat(f.Slant, 'f', -1, 64) + `"`
 		if !strings.Contains(body, want) {
 			t.Errorf("no picker for %s (want %s)", f.ID, want)
 		}
-		if checked := strings.Contains(body, want+" checked"); checked != (i == 0) {
-			t.Errorf("%s: checked = %v; only the first font should be the default", f.ID, checked)
+		if checked := strings.Contains(body, want+" checked") || strings.Contains(body, want+` data-style="italic" checked`); checked != f.Default {
+			t.Errorf("%s: checked = %v; only the default font should be", f.ID, checked)
 		}
 		if f.Italic && !strings.Contains(body, want+` data-style="italic"`) {
 			t.Errorf("%s: italic font not marked italic for the script", f.ID)
 		}
-		if !strings.Contains(html.UnescapeString(body), `href="`+f.CSSURL+`"`) {
+		if f.CSSURL != "" && !strings.Contains(html.UnescapeString(body), `href="`+f.CSSURL+`"`) {
 			t.Errorf("stylesheet for %s not linked", f.ID)
+		}
+		if !strings.Contains(body, `<span class="chip-name font-`+f.ID+`">`+f.Variant+`</span>`) {
+			t.Errorf("%s: chip doesn't show its real name %q", f.ID, f.Variant)
+		}
+	}
+}
+
+// Family tiles appear in catalogue order, with Google Fonts last.
+func TestSheetFamiliesInOrder(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	_, body := get(t, h, "/sheet/arches")
+	var want []string
+	for _, g := range fonts.Groups(fonts.Builtin) {
+		want = append(want, g.Name)
+	}
+	want = append(want, "Google Fonts")
+	var got []string
+	for _, m := range regexp.MustCompile(`name="family" value="([^"]+)"`).FindAllStringSubmatch(body, -1) {
+		got = append(got, m[1])
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("families %q, want %q", got, want)
+	}
+}
+
+// The bundled Briem fonts are declared in font.css at hashed URLs that serve
+// as fonts: a wrong type or a 404 there shows the fallback with no error.
+func TestBundledFontsAreServed(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	_, body := get(t, h, "/")
+	m := regexp.MustCompile(`href="(/static/font\.css\?v=[0-9a-f]+)"`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("page does not link font.css")
+	}
+	_, css := get(t, h, m[1])
+	urls := regexp.MustCompile(`src: url\("(/static/fonts/[^"]+)"\)`).FindAllStringSubmatch(css, -1)
+	if len(urls) != 2 {
+		t.Fatalf("%d bundled @font-face rules, want 2:\n%s", len(urls), css)
+	}
+	for _, u := range urls {
+		res, font := get(t, h, u[1])
+		if res.StatusCode != 200 || res.Header.Get("Content-Type") != "font/ttf" || len(font) < 100000 {
+			t.Errorf("%s: status %d, type %q, %d bytes", u[1], res.StatusCode, res.Header.Get("Content-Type"), len(font))
+		}
+		if !strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
+			t.Errorf("%s: not cached immutably", u[1])
 		}
 	}
 }
@@ -161,7 +208,7 @@ func TestSheetOffersAnyGoogleFont(t *testing.T) {
 // A catalogue that fails validation must stop the server starting, not
 // produce a stylesheet with an unescaped family name in it.
 func TestInvalidCatalogueFailsStartup(t *testing.T) {
-	_, err := New([]fonts.Font{{ID: "x", Label: "X", Family: `x"; }`}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := New([]fonts.Font{{ID: "x", Group: "X", Variant: "X", Family: `x"; }`, Default: true}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err == nil {
 		t.Fatal("New accepted an unsafe font family")
 	}

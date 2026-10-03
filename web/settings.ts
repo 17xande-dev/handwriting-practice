@@ -11,6 +11,8 @@ export interface Settings {
   xh: number;
   /** Model font id from the catalogue, or "custom" for a Google font by name. */
   model: string;
+  /** The family the model belongs to, as the picker's tiles name it. */
+  group: string;
   /** CSS font-style of the model: "normal" or "italic". */
   style: string;
   /** Slope of the model font, degrees right of vertical. */
@@ -21,6 +23,8 @@ export interface Settings {
 }
 
 const storageKey = "italic-practice:toolbar:v2";
+/** The last variant chosen in each family, so going back to a family returns to it. */
+const variantsKey = "italic-practice:variants";
 
 export class Toolbar {
   #form: HTMLFormElement;
@@ -32,6 +36,9 @@ export class Toolbar {
     this.#restore();
     this.#sync();
     this.#last = this.read();
+    // The variant the page opens with counts as used, so leaving its family
+    // and coming back returns to it.
+    this.#rememberVariant(this.#last);
     // The form never submits: Enter in a field would otherwise reload the page.
     form.addEventListener("submit", (e) => e.preventDefault());
     // Some controls (the model picker) sit outside the form and join it with
@@ -41,6 +48,42 @@ export class Toolbar {
       const t = e.target as HTMLInputElement | null;
       if (t?.form === form) this.changed();
     });
+    // Choosing a family tile chooses a variant within it: the one last used
+    // in that family, or its first. The tiles aren't part of the form, and
+    // which one is lit always follows the chosen variant (see #sync).
+    for (const tile of document.querySelectorAll<HTMLInputElement>('input[name="family"]')) {
+      tile.addEventListener("change", () => this.#chooseFamily(tile.value));
+    }
+  }
+
+  #chooseFamily(group: string) {
+    const variants = this.#inputs().filter((e) => e.name === "model" && e.dataset.group === group);
+    if (variants.length === 0) return;
+    const remembered = this.#rememberedVariants()[group];
+    const pick = variants.find((e) => e.value === remembered) ?? variants[0];
+    pick.checked = true;
+    this.changed();
+  }
+
+  #rememberedVariants(): Record<string, string> {
+    try {
+      const v = JSON.parse(localStorage.getItem(variantsKey) ?? "{}");
+      return typeof v === "object" && v !== null ? v : {};
+    } catch {
+      return {};
+    }
+  }
+
+  #rememberVariant(s: Settings) {
+    if (!s.group) return;
+    try {
+      localStorage.setItem(
+        variantsKey,
+        JSON.stringify({ ...this.#rememberedVariants(), [s.group]: s.model }),
+      );
+    } catch {
+      // Not remembered; the family's first variant is chosen next time.
+    }
   }
 
   /** Re-read the settings and tell listeners; also used after a script sets a value. */
@@ -48,6 +91,7 @@ export class Toolbar {
     this.#sync();
     this.#save();
     const now = this.read();
+    this.#rememberVariant(now);
     const before = this.#last;
     this.#last = now;
     for (const fn of this.#listeners) fn(now, before);
@@ -90,6 +134,7 @@ export class Toolbar {
       pen,
       xh: num("xh", 32),
       model: model?.value ?? "",
+      group: model?.dataset.group ?? "",
       style: model?.dataset.style ?? "normal",
       slant: custom ? num("customSlant", 0) : Number(model?.dataset.slant ?? 0) || 0,
       customFont: String(f.get("customFont") ?? "").trim(),
@@ -105,6 +150,13 @@ export class Toolbar {
     }
     for (const el of document.querySelectorAll<HTMLElement>("[data-model]")) {
       el.hidden = el.dataset.model !== s.model;
+    }
+    // Light the chosen variant's family tile, and show only that family's chips.
+    for (const tile of document.querySelectorAll<HTMLInputElement>('input[name="family"]')) {
+      tile.checked = tile.value === s.group;
+    }
+    for (const chip of document.querySelectorAll<HTMLElement>(".chip[data-group]")) {
+      chip.hidden = chip.dataset.group !== s.group;
     }
     const slantOut = document.getElementById("custom-slant-out");
     if (slantOut instanceof HTMLOutputElement && s.model === "custom") {

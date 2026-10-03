@@ -24,6 +24,7 @@ var contentTypes = map[string]string{
 	".js":  "text/javascript; charset=utf-8",
 	".svg": "image/svg+xml",
 	".png": "image/png",
+	".ttf": "font/ttf",
 }
 
 type asset struct {
@@ -36,16 +37,8 @@ type asset struct {
 // cache-busting URLs.
 type assets map[string]asset
 
-func loadAssets(extra map[string][]byte) (assets, error) {
+func loadAssets() (assets, error) {
 	a := assets{}
-	add := func(name string, body []byte) {
-		ctype, ok := contentTypes[path.Ext(name)]
-		if !ok {
-			return
-		}
-		sum := sha256.Sum256(body)
-		a[name] = asset{body: body, ctype: ctype, hash: hex.EncodeToString(sum[:])[:12]}
-	}
 	sub, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		return nil, err
@@ -58,16 +51,24 @@ func loadAssets(extra map[string][]byte) (assets, error) {
 		if err != nil {
 			return err
 		}
-		add(p, body)
+		a.add(p, body)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	for name, body := range extra {
-		add(name, body)
-	}
 	return a, nil
+}
+
+// add registers a servable file. A name whose extension isn't in
+// contentTypes is ignored, so it can never be served.
+func (a assets) add(name string, body []byte) {
+	ctype, ok := contentTypes[path.Ext(name)]
+	if !ok {
+		return
+	}
+	sum := sha256.Sum256(body)
+	a[name] = asset{body: body, ctype: ctype, hash: hex.EncodeToString(sum[:])[:12]}
 }
 
 // url returns the content-hashed URL for a template's {{asset "name"}}. An
