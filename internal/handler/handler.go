@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"path"
 
-	"calligraphy/internal/config"
+	"calligraphy/internal/fonts"
 	"calligraphy/internal/sheets"
 )
 
@@ -21,7 +21,7 @@ var templateFS embed.FS
 
 // Server holds everything a request needs; it is built once at startup.
 type Server struct {
-	cfg    config.Config
+	fonts  []fonts.Font
 	assets assets
 	pages  map[string]*template.Template
 	log    *slog.Logger
@@ -29,20 +29,23 @@ type Server struct {
 
 // page is the data every template receives.
 type page struct {
-	Title      string
-	FontCSSURL string
-	Sheets     []sheets.Sheet
-	Sheet      sheets.Sheet
+	Title  string
+	Fonts  []fonts.Font
+	Sheets []sheets.Sheet
+	Sheet  sheets.Sheet
 }
 
 // New builds the server. Every failure here (an unparsable template, a page
 // missing its content block) is a startup failure, never a broken page later.
-func New(cfg config.Config, log *slog.Logger) (http.Handler, error) {
-	a, err := loadAssets(map[string][]byte{"font.css": fontCSS(cfg.FontFamily)})
+func New(fontList []fonts.Font, log *slog.Logger) (http.Handler, error) {
+	if err := fonts.Validate(fontList); err != nil {
+		return nil, err
+	}
+	a, err := loadAssets(map[string][]byte{"font.css": fonts.CSS(fontList)})
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, assets: a, log: log}
+	s := &Server{fonts: fontList, assets: a, log: log}
 	if s.pages, err = parsePages(a); err != nil {
 		return nil, err
 	}
@@ -55,15 +58,7 @@ func New(cfg config.Config, log *slog.Logger) (http.Handler, error) {
 		u, _ := a.url("favicon.svg")
 		http.Redirect(w, r, u, http.StatusMovedPermanently)
 	})
-	return securityHeaders(newPolicy(cfg), mux), nil
-}
-
-// fontCSS hands the configured family to the stylesheet as a custom property.
-// Generating a stylesheet keeps the family out of an inline style, which the
-// CSP refuses. config.Load restricts the name to characters that are safe
-// inside a quoted CSS string.
-func fontCSS(family string) []byte {
-	return fmt.Appendf(nil, ":root { --ref-font: %q; }\n", family)
+	return securityHeaders(newPolicy(fontList), mux), nil
 }
 
 // parsePages parses one template set per page (the layout plus that page),
@@ -101,7 +96,7 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data pag
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	data.FontCSSURL = s.cfg.FontCSSURL
+	data.Fonts = s.fonts
 	var buf bytes.Buffer
 	if err := t.ExecuteTemplate(&buf, "layout.html", data); err != nil {
 		s.log.Error("render", "page", name, "err", err)

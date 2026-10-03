@@ -20,6 +20,8 @@ export interface FontInfo {
   /** x-height as a fraction of the font size. */
   xRatio: number;
   proportions: Proportions;
+  /** Slope in degrees right of vertical, for the slant guides. */
+  slant: number;
 }
 
 interface Surface {
@@ -33,11 +35,19 @@ function surface(canvas: HTMLCanvasElement): Surface {
   return { canvas, ctx };
 }
 
-/** Size a canvas's backing store for the device pixel ratio, so ink stays sharp on Retina. */
+/**
+ * Size a canvas for a band: the backing store at the device pixel ratio, so
+ * ink stays sharp on Retina, and the CSS size to match it exactly. Pointer
+ * positions are in CSS pixels and ink is drawn in backing pixels / dpr, so if
+ * the two sizes ever disagreed the browser would stretch the drawing and the
+ * ink would drift away from the Pencil across the line.
+ */
 function resize(s: Surface, b: Band) {
   const dpr = globalThis.devicePixelRatio || 1;
   s.canvas.width = Math.round(b.width * dpr);
   s.canvas.height = Math.round(b.height * dpr);
+  s.canvas.style.width = `${b.width}px`;
+  s.canvas.style.height = `${b.height}px`;
   s.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
@@ -52,6 +62,7 @@ export class Row {
   #clear: HTMLButtonElement;
 
   #band: Band | null = null;
+  #slant = 0;
   #strokes: Stroke[] = [];
   #live: Stroke | null = null;
   #predicted: Point[] = [];
@@ -108,8 +119,11 @@ export class Row {
    * line on a narrow screen shrinks rather than running off the edge.
    */
   layout(xh: number, font: FontInfo) {
-    const width = this.#el.querySelector(".reference")!.clientWidth;
+    // The practice line is the one that must be exact, so it sets the width.
+    // The model band sits in the same grid column and is the same width.
+    const width = this.#el.querySelector(".practice")!.clientWidth;
     if (width === 0) return;
+    this.#slant = font.slant;
 
     const ctx = this.#ref.ctx;
     ctx.font = `${xh / font.xRatio}px ${font.family}`;
@@ -127,7 +141,7 @@ export class Row {
     resize(this.#practice, b);
     resize(this.#base, b);
 
-    drawGuides(this.#ref.ctx, b, this.#theme.guides);
+    drawGuides(this.#ref.ctx, b, this.#theme.guides, this.#slant);
     this.#ref.ctx.font = `${fitted / font.xRatio}px ${font.family}`;
     this.#ref.ctx.fillStyle = this.#theme.modelInk;
     this.#ref.ctx.textBaseline = "alphabetic";
@@ -160,7 +174,7 @@ export class Row {
     if (!b) return;
     const ctx = this.#base.ctx;
     ctx.clearRect(0, 0, b.width, b.height);
-    drawGuides(ctx, b, this.#theme.guides);
+    drawGuides(ctx, b, this.#theme.guides, this.#slant);
     for (const s of this.#strokes) drawStroke(ctx, b, s, this.#theme.penInk);
   }
 

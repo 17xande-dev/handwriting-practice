@@ -52,6 +52,10 @@ All of it is in `web/pen.ts`, using Pointer Events:
 
 ### Pens
 
+The toolbar shows each pen as a picture, with a live preview that writes a
+short "nu" in the current pen, weight and slant. Weight, nib width, nib angle
+and size are all sliders.
+
 - **Monoline**: round pen, width follows pressure. Basic Getty-Dubay italic is
   written this way, with a pencil or fine pen.
 - **Edged nib**: a broad nib at a fixed angle (default 45°), sized in nib
@@ -59,35 +63,34 @@ All of it is in `web/pen.ts`, using Pointer Events:
   nib edge sweeps, so thick and thin strokes come from the stroke direction as
   with a real chisel-edged pen.
 
-### The reference font
+### Model fonts
 
-The models are drawn on a canvas with the configured web font. The guides are
-placed from the font's own measured proportions (the heights of "x" and "l",
-the depth of "p"), so any font sits correctly on them.
+Worksheets can show their models in either font from the catalogue in
+`internal/fonts`. The models are drawn on a canvas, and the guides are placed
+from the chosen font's measured proportions (the heights of "x" and "l", the
+depth of "p"), so any font sits correctly on them. Each font also sets the
+paper's slant lines:
 
-The default is **Edu SA Beginner** (SIL OFL, Google Fonts), a South Australian
-school hand derived from italic. Of the open-licensed school fonts compared, it
-was closest to Getty-Dubay basic italic: elliptical bowls, branching arches,
-exit strokes and a gentle slope. The Edu TAS and Playwrite faces were steeper
-or rounder. Where it differs: its f stays on the baseline, whereas Getty-Dubay's
-descends. The official Getty-Dubay fonts are commercial.
+| Model | Font | Slant | Why |
+|---|---|---|---|
+| Italic (default) | Edu SA Beginner | 5° | A South Australian school hand derived from italic. Of the open-licensed school fonts compared, it was closest to Getty-Dubay basic italic: elliptical bowls, branching arches, exit strokes and a gentle slope. Its f stays on the baseline, whereas Getty-Dubay's descends. |
+| Upright | Playwrite US Modern | 0° | An upright school hand from the same Playwrite family. Edu QLD and Playwrite NZ still slope, and Andika is a print face rather than handwriting. |
 
-| Variable | Default | |
-|---|---|---|
-| `ADDR` | `:8080` | Listen address |
-| `FONT_FAMILY` | `Edu SA Beginner` | CSS family name. Letters, digits, spaces and hyphens only. |
-| `FONT_CSS_URL` | Google Fonts URL for the family | Stylesheet that defines the family; set it empty for a locally installed font |
-| `FONT_FILE_ORIGINS` | `https://fonts.gstatic.com` | Comma-separated origins the stylesheet loads font files from |
+Both fonts are SIL OFL and served by Google Fonts; the official Getty-Dubay
+fonts are commercial. `ADDR` (default `:8080`) is the only environment
+variable.
 
-The Content-Security-Policy is built from these settings: `style-src` and
-`font-src` allow exactly the configured origins and nothing else.
+The Content-Security-Policy is built from the catalogue: `style-src` and
+`font-src` allow exactly the origins the fonts use, and nothing else.
+`fonts.Validate` runs at startup and is the gate user-supplied fonts will
+have to pass.
 
 ## Security
 
 - The CSP has no `unsafe-inline`. Templates carry no `style=` attributes, no
   `on*=` handlers and no inline scripts, and a test checks every served page
-  for them. The font family reaches CSS through a generated, content-hashed
-  `font.css`, not an inline style.
+  for them. The font families reach CSS through a generated, content-hashed
+  `font.css`, not inline styles.
 - `/static` serves only extensions in an explicit allow-list, at
   content-hashed URLs cached as immutable. An unhashed or stale URL must
   revalidate.
@@ -97,7 +100,7 @@ The Content-Security-Policy is built from these settings: `style-src` and
 | Decision | Candidates | What would force it |
 |---|---|---|
 | Saving practice | IndexedDB on the device; SQLite on the server | Wanting history, or work surviving a reload |
-| User-chosen fonts | A per-user font URL | That feature. The CSP then has to admit user-supplied origins, so they need validating against an allow-list, not trusting. |
+| User-chosen fonts | A per-user entry in the catalogue | That feature. The CSP is built per catalogue, so user-supplied origins need checking against an allow-list (for example, Google Fonts only), not trusting. |
 | Stroke-order models | Hand-authored SVG paths per letter | Wanting animated stroke order or direction arrows, which a font can't give |
 | Getty-Dubay proportions | Fixed guide ratios instead of the font's measured ones | A model font whose proportions stray from the hand |
 | htmx / Web Awesome | Add when a server round-trip or a complex control needs them | Saving or account features. v1 has neither. |

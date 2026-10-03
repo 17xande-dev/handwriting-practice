@@ -123,6 +123,8 @@ a { color: var(--accent); }
   border-bottom: 1px solid var(--rule);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .toolbar-inner {
@@ -133,56 +135,144 @@ a { color: var(--accent); }
   padding-block: var(--gap-sm);
 }
 
-.segmented {
-  display: inline-flex;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
+/* Visually hidden but still announced. */
+legend, .preview figcaption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
   overflow: hidden;
-  background: #fff;
-
-  legend {
-    /* Visually hidden but still announced. */
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-
-  label {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--tap);
-    padding-inline: var(--gap-md);
-    cursor: pointer;
-    user-select: none;
-    -webkit-user-select: none;
-
-    + label { border-left: 1px solid var(--rule); }
-    &:has(:checked) { background: var(--accent); color: var(--accent-ink); }
-    &:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: -4px; }
-  }
-
-  input { position: absolute; opacity: 0; pointer-events: none; }
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
-.field, .check {
+/* Picture buttons for the model font and the pen: a drawing of the thing,
+   with its name underneath. The radio itself is hidden; the tile is the target. */
+.tiles {
+  display: inline-flex;
+  gap: var(--gap-xs);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.tile {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  min-width: 4.75rem;
+  min-height: 3.75rem;
+  padding: var(--gap-xs) var(--gap-sm);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--ink-soft);
+  cursor: pointer;
+  touch-action: manipulation;
+
+  input { position: absolute; opacity: 0; pointer-events: none; }
+
+  &:has(:checked) {
+    border-color: var(--accent);
+    background: color-mix(in oklab, #fff, var(--accent) 10%);
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  &:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+}
+
+.tile-art {
+  width: 1.9rem;
+  height: 1.9rem;
+}
+
+span.tile-art {
+  width: auto;
+  font-size: 1.6rem;
+  line-height: 1.9rem;
+  color: var(--ink);
+}
+
+.tile-label { font-size: 0.8rem; line-height: 1.1; }
+
+/* A live sample of the current pen, drawn by app.js. */
+.preview {
+  margin: 0;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fff;
+  overflow: hidden;
+
+  canvas { display: block; }
+}
+
+.sliders {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs) var(--gap-md);
+}
+
+.slider {
   display: inline-flex;
   align-items: center;
   gap: var(--gap-xs);
   min-height: var(--tap);
-  font-size: 0.95rem;
   color: var(--ink-soft);
+  font-size: 0.9rem;
 
   &[hidden] { display: none; }
+
+  input[type="range"] { width: 6rem; accent-color: var(--accent); }
+  /* The nib slider's value counts nib widths per x-height, so fewer means a
+     wider nib; reversing it puts the wide end on the right like the others. */
+  input.reversed { direction: rtl; }
+  output { min-width: 3.5ch; font-variant-numeric: tabular-nums; }
 }
 
-.field input[type="range"] { width: 6rem; accent-color: var(--accent); }
-.field output { min-width: 3ch; font-variant-numeric: tabular-nums; }
-.field abbr { text-decoration: none; }
-.check input { width: 1.3rem; height: 1.3rem; accent-color: var(--accent); }
+.slider-name { min-width: 2.6rem; }
+
+.slider-end {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: none;
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+.size-small, .size-large {
+  font-family: var(--ref-font);
+  line-height: 1;
+}
+.size-small { font-size: 0.85rem; }
+.size-large { font-size: 1.6rem; }
+
+.toggle {
+  display: inline-grid;
+  justify-items: center;
+  gap: 2px;
+  min-width: 4.75rem;
+  min-height: 3.75rem;
+  align-content: center;
+  padding: var(--gap-xs) var(--gap-sm);
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+  touch-action: manipulation;
+
+  input { position: absolute; opacity: 0; pointer-events: none; }
+  svg { width: 1.6rem; height: 1.6rem; }
+
+  &:has(:checked) {
+    border-style: solid;
+    border-color: var(--accent);
+    color: var(--accent);
+    background: color-mix(in oklab, #fff, var(--accent) 10%);
+  }
+  &:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+}
 
 /* ---- Practice rows ------------------------------------------------------- */
 
@@ -197,8 +287,11 @@ a { color: var(--accent); }
 .row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  /* The model sits directly above the practice line and is exactly as wide,
+     so the two compare letter for letter, and so both canvases are laid out
+     for the same width. */
   grid-template-areas:
-    "ref     ref"
+    "ref      ."
     "practice actions";
   gap: var(--gap-xs) var(--gap-sm);
   align-items: start;
@@ -210,7 +303,11 @@ a { color: var(--accent); }
   /* app.js sets the height from the x-height; this is the pre-script size. */
   min-height: 6rem;
 
-  canvas { display: block; width: 100%; height: 100%; }
+  overflow: hidden;
+
+  /* app.js sets the canvas's CSS size to exactly its backing store / dpr, so
+     a layout mismatch can only clip, never stretch the ink away from the pen. */
+  canvas { display: block; }
 }
 
 .reference {
@@ -291,7 +388,7 @@ button {
     grid-template-areas: "ref" "practice" "actions";
   }
   .row-actions { flex-direction: row; justify-content: flex-end; }
-  .field input[type="range"] { width: 5.5rem; }
+  .slider input[type="range"] { width: 5.5rem; }
 }
 
 .back { margin-block: var(--gap-lg); }

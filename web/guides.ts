@@ -8,10 +8,11 @@ export interface GuideColors {
   faint: string;
 }
 
-/** Getty-Dubay italic slopes about 5° to the right of vertical. */
-const slant = (5 * Math.PI) / 180;
-
-export function drawGuides(ctx: CanvasRenderingContext2D, b: Band, c: GuideColors) {
+/**
+ * Draw the four rules and the slant lines. `slant` is degrees right of
+ * vertical: about 5° for Getty-Dubay italic, 0° for upright paper.
+ */
+export function drawGuides(ctx: CanvasRenderingContext2D, b: Band, c: GuideColors, slant: number) {
   ctx.save();
   const line = (y: number, color: string, width: number, dash: number[] = []) => {
     ctx.beginPath();
@@ -31,8 +32,8 @@ export function drawGuides(ctx: CanvasRenderingContext2D, b: Band, c: GuideColor
   ctx.strokeStyle = c.faint;
   ctx.lineWidth = 1;
   const rise = b.descender - b.ascender;
-  const run = Math.tan(slant) * rise;
-  for (let x = b.left; x < b.width + run; x += b.xh * 1.5) {
+  const run = Math.tan((slant * Math.PI) / 180) * rise;
+  for (let x = b.left; x < b.width + Math.max(0, run); x += b.xh * 1.5) {
     ctx.moveTo(x - run, b.descender);
     ctx.lineTo(x, b.ascender);
   }

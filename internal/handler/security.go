@@ -2,26 +2,36 @@ package handler
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
-	"calligraphy/internal/config"
+	"calligraphy/internal/fonts"
 )
 
-// Policy is the Content-Security-Policy, built from config so a change of
-// reference font cannot be made without its origins being allowed too.
+// Policy is the Content-Security-Policy, built from the font catalogue so a
+// font cannot be added without its origins being allowed too, and no origin
+// is allowed that no font uses.
 type Policy struct {
 	StyleSrc []string
 	FontSrc  []string
 }
 
-func newPolicy(c config.Config) Policy {
+func newPolicy(list []fonts.Font) Policy {
 	p := Policy{StyleSrc: []string{"'self'"}, FontSrc: []string{"'self'"}}
-	if c.FontCSSURL != "" {
-		// Already validated by config, so the error cannot happen here.
-		origin, _ := config.PublicOrigin(c.FontCSSURL)
-		p.StyleSrc = append(p.StyleSrc, origin)
+	add := func(dst *[]string, raw string) {
+		if raw == "" {
+			return
+		}
+		// Already validated by fonts.Validate, so the error cannot happen here.
+		o, _ := fonts.PublicOrigin(raw)
+		if !slices.Contains(*dst, o) {
+			*dst = append(*dst, o)
+		}
 	}
-	p.FontSrc = append(p.FontSrc, c.FontFileOrigins...)
+	for _, f := range list {
+		add(&p.StyleSrc, f.CSSURL)
+		add(&p.FontSrc, f.FileOrigin)
+	}
 	return p
 }
 

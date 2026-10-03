@@ -1,30 +1,23 @@
 package handler
 
 import (
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
-	"calligraphy/internal/config"
+	"calligraphy/internal/fonts"
 	"calligraphy/internal/sheets"
 )
 
-func testConfig() config.Config {
-	return config.Config{
-		Addr:            ":0",
-		FontFamily:      config.DefaultFontFamily,
-		FontCSSURL:      config.DefaultFontCSSURL,
-		FontFileOrigins: []string{config.DefaultFontFileOrigins},
-	}
-}
-
-func newTestServer(t *testing.T, c config.Config) http.Handler {
+func newTestServer(t *testing.T, list []fonts.Font) http.Handler {
 	t.Helper()
-	h, err := New(c, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h, err := New(list, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +44,7 @@ func servedPages() []string {
 }
 
 func TestRoutes(t *testing.T) {
-	h := newTestServer(t, testConfig())
+	h := newTestServer(t, fonts.Builtin)
 	cases := []struct {
 		path   string
 		status int
@@ -76,7 +69,7 @@ func TestRoutes(t *testing.T) {
 // Every model line needs its own practice canvas and buttons; a template slip
 // that rendered only the first line would otherwise pass unnoticed.
 func TestSheetRendersEveryLine(t *testing.T) {
-	h := newTestServer(t, testConfig())
+	h := newTestServer(t, fonts.Builtin)
 	s, _ := sheets.Get("arches")
 	_, body := get(t, h, "/sheet/arches")
 	if n := strings.Count(body, `class="row"`); n != len(s.Lines) {
@@ -90,7 +83,7 @@ func TestSheetRendersEveryLine(t *testing.T) {
 }
 
 func TestCSPAllowsConfiguredFontOrigins(t *testing.T) {
-	h := newTestServer(t, testConfig())
+	h := newTestServer(t, fonts.Builtin)
 	res, _ := get(t, h, "/")
 	csp := res.Header.Get("Content-Security-Policy")
 	for _, want := range []string{
@@ -114,17 +107,42 @@ func TestCSPAllowsConfiguredFontOrigins(t *testing.T) {
 // With no remote stylesheet the page must not link one, and the CSP must not
 // keep allowing a host nothing uses.
 func TestLocalFontNeedsNoRemoteOrigins(t *testing.T) {
-	c := testConfig()
-	c.FontCSSURL = ""
-	c.FontFileOrigins = nil
-	h := newTestServer(t, c)
-	res, body := get(t, h, "/")
+	h := newTestServer(t, []fonts.Font{{ID: "local", Label: "Local", Family: "Local Font"}})
+	res, body := get(t, h, "/sheet/arches")
 	if strings.Contains(body, "googleapis") {
-		t.Error("page still links the remote font stylesheet")
+		t.Error("page still links a remote font stylesheet")
 	}
 	csp := res.Header.Get("Content-Security-Policy")
 	if !strings.Contains(csp, "style-src 'self';") || !strings.Contains(csp, "font-src 'self';") {
 		t.Errorf("CSP still allows remote font origins:\n%s", csp)
+	}
+}
+
+// Every catalogue font must be offered on a worksheet, carrying the slant the
+// script draws the paper with, and have its stylesheet linked.
+func TestSheetOffersEveryModelFont(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	_, body := get(t, h, "/sheet/arches")
+	for i, f := range fonts.Builtin {
+		want := `value="` + f.ID + `" data-slant="` + strconv.FormatFloat(f.Slant, 'f', -1, 64) + `"`
+		if !strings.Contains(body, want) {
+			t.Errorf("no picker for %s (want %s)", f.ID, want)
+		}
+		if checked := strings.Contains(body, want+" checked"); checked != (i == 0) {
+			t.Errorf("%s: checked = %v; only the first font should be the default", f.ID, checked)
+		}
+		if !strings.Contains(html.UnescapeString(body), `href="`+f.CSSURL+`"`) {
+			t.Errorf("stylesheet for %s not linked", f.ID)
+		}
+	}
+}
+
+// A catalogue that fails validation must stop the server starting, not
+// produce a stylesheet with an unescaped family name in it.
+func TestInvalidCatalogueFailsStartup(t *testing.T) {
+	_, err := New([]fonts.Font{{ID: "x", Label: "X", Family: `x"; }`}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err == nil {
+		t.Fatal("New accepted an unsafe font family")
 	}
 }
 
@@ -138,7 +156,7 @@ var (
 // The CSP refuses inline styles and handlers, so one in a template would
 // render, pass every handler test and silently do nothing in a browser.
 func TestNoInlineStylesOrHandlers(t *testing.T) {
-	h := newTestServer(t, testConfig())
+	h := newTestServer(t, fonts.Builtin)
 	pages := servedPages()
 	if len(pages) < 5 {
 		t.Fatalf("only %d pages checked; the sheet list is not loading", len(pages))
@@ -161,7 +179,7 @@ func TestNoInlineStylesOrHandlers(t *testing.T) {
 // Every asset a page references must resolve, with the type the browser
 // needs: a module script served as text/plain is refused outright.
 func TestReferencedAssetsAreServed(t *testing.T) {
-	h := newTestServer(t, testConfig())
+	h := newTestServer(t, fonts.Builtin)
 	_, body := get(t, h, "/sheet/warm-up")
 	refs := regexp.MustCompile(`(?:href|src)="(/static/[^"]+)"`).FindAllStringSubmatch(body, -1)
 	if len(refs) < 4 {
@@ -185,7 +203,7 @@ func TestReferencedAssetsAreServed(t *testing.T) {
 // A stale or bare URL must revalidate, or a deploy could leave an old app.js
 // pinned in a browser cache for a year.
 func TestUnhashedAssetIsNotImmutable(t *testing.T) {
-	h := newTestServer(t, testConfig())
+	h := newTestServer(t, fonts.Builtin)
 	for _, u := range []string{"/static/app.js", "/static/app.js?v=stale"} {
 		res, _ := get(t, h, u)
 		if res.StatusCode != 200 || strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
@@ -195,7 +213,7 @@ func TestUnhashedAssetIsNotImmutable(t *testing.T) {
 }
 
 func TestUnlistedExtensionIsNotServed(t *testing.T) {
-	h := newTestServer(t, testConfig())
+	h := newTestServer(t, fonts.Builtin)
 	for _, u := range []string{"/static/", "/static/../handler.go", "/static/nope.css"} {
 		if res, _ := get(t, h, u); res.StatusCode == 200 {
 			t.Errorf("%s served", u)
@@ -203,17 +221,17 @@ func TestUnlistedExtensionIsNotServed(t *testing.T) {
 	}
 }
 
-func TestFontStylesheetCarriesFamily(t *testing.T) {
-	c := testConfig()
-	c.FontFamily = "Some Font"
-	h := newTestServer(t, c)
+func TestFontStylesheetCarriesFamilies(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
 	_, body := get(t, h, "/")
 	m := regexp.MustCompile(`href="(/static/font\.css\?v=[0-9a-f]+)"`).FindStringSubmatch(body)
 	if m == nil {
 		t.Fatal("page does not link font.css")
 	}
 	_, css := get(t, h, m[1])
-	if !strings.Contains(css, `--ref-font: "Some Font";`) {
-		t.Errorf("font.css = %q", css)
+	for _, f := range fonts.Builtin {
+		if !strings.Contains(css, "--font-"+f.ID+`: "`+f.Family+`"`) {
+			t.Errorf("font.css lacks %s:\n%s", f.ID, css)
+		}
 	}
 }

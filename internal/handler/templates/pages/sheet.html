@@ -1,29 +1,83 @@
 {{define "content"}}
-<form class="toolbar" id="toolbar" aria-label="Pen settings">
+<form class="toolbar" id="toolbar" aria-label="Pen and paper settings">
   <div class="inner toolbar-inner">
-    <fieldset class="segmented">
+    <fieldset class="tiles">
+      <legend>Model</legend>
+      {{- range $i, $f := .Fonts}}
+      <label class="tile">
+        <input type="radio" name="model" value="{{.ID}}" data-slant="{{.Slant}}"{{if eq $i 0}} checked{{end}}>
+        <span class="tile-art font-{{.ID}}" aria-hidden="true">an</span>
+        <span class="tile-label">{{.Label}}</span>
+      </label>
+      {{- end}}
+    </fieldset>
+
+    <fieldset class="tiles">
       <legend>Pen</legend>
-      <label><input type="radio" name="pen" value="monoline" checked> Monoline</label>
-      <label><input type="radio" name="pen" value="edged"> Edged nib</label>
+      <label class="tile">
+        <input type="radio" name="pen" value="monoline" checked>
+        <svg class="tile-art" viewBox="0 0 40 40" aria-hidden="true">
+          <path d="M8 32 L12 22 L28 6 L34 12 L18 28 Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M8 32 L12 22 L18 28 Z" fill="currentColor"/>
+          <path d="M24 10 L30 16" stroke="currentColor" stroke-width="2"/>
+        </svg>
+        <span class="tile-label">Monoline</span>
+      </label>
+      <label class="tile">
+        <input type="radio" name="pen" value="edged">
+        <svg class="tile-art" viewBox="0 0 40 40" aria-hidden="true">
+          <path d="M14 6 L26 6 L27 20 L23 34 L17 34 L13 20 Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M17 34 L23 34 L22 29 L18 29 Z" fill="currentColor"/>
+          <path d="M20 14 L20 26" stroke="currentColor" stroke-width="1.5"/>
+          <circle cx="20" cy="13" r="1.8" fill="currentColor"/>
+        </svg>
+        <span class="tile-label">Edged nib</span>
+      </label>
     </fieldset>
-    <label class="field" data-pen="monoline">Weight
-      <input type="range" name="weight" min="1" max="5" step="1" value="3">
+
+    <figure class="preview">
+      <canvas id="pen-preview" aria-hidden="true"></canvas>
+      <figcaption>Your pen</figcaption>
+    </figure>
+
+    <label class="toggle">
+      <input type="checkbox" name="finger">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11 V5 a1.5 1.5 0 0 1 3 0 V10 M12 10 V4 a1.5 1.5 0 0 1 3 0 V10 M15 10 V6 a1.5 1.5 0 0 1 3 0 V14 c0 4 -2.5 7 -6.5 7 c-3 0 -4.5 -1.5 -6 -4 L3.5 13 a1.5 1.5 0 0 1 2.5 -1.5 L9 14 V11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      <span>Finger draws</span>
     </label>
-    <label class="field" data-pen="edged" hidden><abbr title="Nib widths per x-height">x-height</abbr>
-      <input type="range" name="nibs" min="3" max="8" step="0.5" value="5">
-      <output name="nibsOut">5 nibs</output>
-    </label>
-    <label class="field" data-pen="edged" hidden>Angle
-      <input type="range" name="angle" min="20" max="60" step="5" value="45">
-      <output name="angleOut">45°</output>
-    </label>
-    <fieldset class="segmented">
-      <legend>Size</legend>
-      <label><input type="radio" name="size" value="s"> S</label>
-      <label><input type="radio" name="size" value="m" checked> M</label>
-      <label><input type="radio" name="size" value="l"> L</label>
-    </fieldset>
-    <label class="check"><input type="checkbox" name="finger"> Finger draws</label>
+
+    <div class="sliders">
+      <label class="slider" data-pen="monoline">
+        <span class="slider-name">Weight</span>
+        <svg class="slider-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20 L20 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <input type="range" name="weight" min="1" max="5" step="0.5" value="3">
+        <svg class="slider-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19 L19 5" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg>
+      </label>
+      <label class="slider" data-pen="edged" hidden>
+        <span class="slider-name">Nib</span>
+        <svg class="slider-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 L15 4 L15 20 L9 20 Z" fill="currentColor"/></svg>
+        <!-- Right is wider: the value is nib widths per x-height, so the range runs reversed. -->
+        <input class="reversed" type="range" name="nibs" min="3" max="8" step="0.5" value="5">
+        <svg class="slider-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4 L19 4 L19 20 L5 20 Z" fill="currentColor"/></svg>
+        <output name="nibsOut">5 nibs</output>
+      </label>
+      <label class="slider" data-pen="edged" hidden>
+        <span class="slider-name">Angle</span>
+        <input type="range" name="angle" min="0" max="90" step="5" value="45">
+        <svg class="slider-end dial" viewBox="-12 -12 24 24" aria-hidden="true">
+          <line x1="-11" y1="0" x2="11" y2="0" stroke="currentColor" stroke-width="0.75" stroke-dasharray="2 2"/>
+          <line id="angle-nib" x1="-9" y1="0" x2="9" y2="0" stroke="currentColor" stroke-width="3" stroke-linecap="round" transform="rotate(-45)"/>
+        </svg>
+        <output name="angleOut">45°</output>
+      </label>
+      <label class="slider">
+        <span class="slider-name">Size</span>
+        <span class="slider-end size-small" aria-hidden="true">a</span>
+        <input type="range" name="xh" min="20" max="60" step="2" value="32">
+        <span class="slider-end size-large" aria-hidden="true">a</span>
+      </label>
+    </div>
+
   </div>
 </form>
 

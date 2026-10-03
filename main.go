@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"calligraphy/internal/config"
+	"calligraphy/internal/fonts"
 	"calligraphy/internal/handler"
 )
 
@@ -24,11 +25,8 @@ func main() {
 }
 
 func run(log *slog.Logger) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-	h, err := handler.New(cfg, log)
+	cfg := config.Load()
+	h, err := handler.New(fonts.Builtin, log)
 	if err != nil {
 		return err
 	}
@@ -47,7 +45,7 @@ func run(log *slog.Logger) error {
 
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", cfg.Addr, "font", cfg.FontFamily)
+		log.Info("listening", "addr", cfg.Addr)
 		errc <- srv.ListenAndServe()
 	}()
 
