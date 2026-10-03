@@ -1,18 +1,21 @@
-// Pointer Events input for the worksheet.
+// Pencil and finger input for the worksheet.
 //
-// The writing area (everything below the toolbar) is taken over from the
-// browser: it has `touch-action: none` and no text selection, so nothing
-// Safari would do with a touch there (scroll, zoom, select, magnify) can
-// happen while the hand rests on the glass. Instead:
+// Scrolling is Safari's own; this only decides when it may happen:
 //
-//  - the Pencil writes on a practice line, and does nothing anywhere else;
-//  - two fingers scroll the page, from script, with momentum;
-//  - a quick two-finger tap undoes, a three-finger tap redoes;
-//  - a single touch does nothing, so a resting palm is harmless.
+//  - the Pencil never scrolls: its touches are cancelled at touchstart
+//    (Safari reports touchType "stylus"), so it only writes;
+//  - one finger, or a palm, doesn't scroll: its moves are cancelled while it
+//    is the only touch down;
+//  - two fingers scroll natively, with Safari's own momentum;
+//  - a quick two-finger tap undoes, a three-finger tap redoes.
 //
-// Contact size can't separate a palm from a finger: Safari reports fingertips
-// 63–125px across on an iPad Air. Requiring two fingers to scroll is what
-// makes a palm safe, as in most drawing apps.
+// Scrolling from script was tried and abandoned: on the iPad, Safari reports
+// a touch's position shifted by however far script has scrolled the page
+// (clientY and screenY alike), so moving the page by the fingers' travel fed
+// back into itself and the page shuddered or swung. Contact size can't tell a
+// palm from a finger either (Safari reports fingertips 63-125px across), so
+// the finger count is what makes a palm safe. And while the Pencil is on the
+// glass, iPadOS stops delivering finger touches at all.
 //
 // "Finger draws" in the toolbar lets one finger (or a mouse) write instead,
 // for testing on a desktop.
@@ -35,11 +38,6 @@ export interface PenHandlers {
   move(samples: Sample[], predicted: Sample[]): void;
   end(): void;
 }
-
-/** Touches that land this soon after the Pencil was last on the glass are a palm. */
-const palmGuardMs = 500;
-
-let lastPenActivity = -Infinity;
 
 function sample(e: PointerEvent, rect: DOMRect): Sample {
   const s: Sample = {
@@ -156,8 +154,9 @@ export class TapTracker {
 }
 
 /**
- * Take the writing area over from the browser: no selection, no native
- * gestures, two-finger scrolling from script, single touches ignored.
+ * Gate the browser's own touch handling over the writing area: the Pencil
+ * writes and never scrolls, two fingers scroll, one finger or a palm does
+ * nothing, and quick multi-finger taps undo and redo.
  */
 export function attachWritingArea(
   area: HTMLElement,
@@ -165,111 +164,50 @@ export function attachWritingArea(
   onTap: (fingers: number) => void = () => {},
 ): void {
   const taps = new TapTracker();
-  // Every touch currently down in the area, and where it last was.
-  const touches = new Map<number, { x: number; y: number }>();
-  // Scroll state while two or more fingers are down: the centroid it last
-  // scrolled from, and recent centroid positions for the momentum on release.
-  let pan: { x: number; y: number; trail: Array<[number, number]> } | null = null;
-  let glide = 0; // requestAnimationFrame id of the momentum animation
+  const stylus = (t: Touch) => (t as Touch & { touchType?: string }).touchType === "stylus";
 
-  const stopGlide = () => {
-    if (glide) cancelAnimationFrame(glide);
-    glide = 0;
-  };
-
-  const centroid = () => {
-    let x = 0, y = 0;
-    for (const t of touches.values()) {
-      x += t.x;
-      y += t.y;
-    }
-    return { x: x / touches.size, y: y / touches.size };
-  };
-
-  /** Start, or restart from the current centroid when a finger is added or lifted. */
-  const repan = () => {
-    if (touches.size < 2 || performance.now() - lastPenActivity < palmGuardMs) {
-      pan = null;
+  // Touch events, not pointer events, because only cancelling these stops
+  // Safari scrolling. Not passive, so they can be cancelled.
+  area.addEventListener("touchstart", (e) => {
+    if ([...e.changedTouches].some(stylus)) {
+      e.preventDefault(); // the Pencil only writes
       return;
     }
-    const c = centroid();
-    pan = { x: c.x, y: c.y, trail: pan?.trail ?? [] };
-    // Only a scroll captures its fingers, so they keep scrolling wherever they
-    // go. A single finger is never captured: a capturing element receives the
-    // click, which would stop a tap on Undo, Clear or a link from working.
-    for (const id of touches.keys()) {
-      try {
-        area.setPointerCapture(id);
-      } catch {
-        // Synthetic or already-gone pointer.
-      }
+    // With "Finger draws" on, a finger on a practice line writes instead.
+    const t = e.target;
+    if (touchWrites() && e.touches.length === 1 && t instanceof Element && t.closest(".practice")) {
+      e.preventDefault();
     }
-  };
+  }, { passive: false });
 
+  area.addEventListener("touchmove", (e) => {
+    const all = [...e.touches];
+    const fingers = all.filter((t) => !stylus(t)).length;
+    // Scroll only for two fingers or more, and never with the Pencil down.
+    if (fingers < 2 || all.some(stylus)) e.preventDefault();
+  }, { passive: false });
+
+  // Taps are read from pointer events. Once Safari starts a native scroll it
+  // cancels the fingers' pointers, which spoils any tap in progress, so a
+  // scroll can never undo anything.
   area.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "pen") {
-      lastPenActivity = e.timeStamp;
       taps.pen();
-      // The Pencil landing ends any scroll, and clears any stray selection.
-      pan = null;
-      stopGlide();
       getSelection()?.removeAllRanges();
       // The Pencil only writes on a practice line; anywhere else it does nothing.
       e.preventDefault();
       return;
     }
-    if (e.pointerType !== "touch" || (e.defaultPrevented && touchWrites())) return;
-    stopGlide();
-    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    taps.down(e.pointerId, e.clientX, e.clientY, e.timeStamp);
-    repan();
+    if (e.pointerType === "touch") taps.down(e.pointerId, e.screenX, e.screenY, e.timeStamp);
   });
-
   area.addEventListener("pointermove", (e) => {
-    if (e.pointerType === "pen") {
-      lastPenActivity = e.timeStamp;
-      taps.pen();
-      return;
-    }
-    const t = touches.get(e.pointerId);
-    if (!t) return;
-    taps.move(e.pointerId, e.clientX, e.clientY);
-    t.x = e.clientX;
-    t.y = e.clientY;
-    if (!pan) return;
-    const c = centroid();
-    globalThis.scrollBy(pan.x - c.x, pan.y - c.y);
-    pan.x = c.x;
-    pan.y = c.y;
-    pan.trail.push([e.timeStamp, c.y]);
-    if (pan.trail.length > 8) pan.trail.shift();
+    if (e.pointerType === "pen") taps.pen();
+    else if (e.pointerType === "touch") taps.move(e.pointerId, e.screenX, e.screenY);
   });
-
   const release = (e: PointerEvent) => {
-    if (!touches.delete(e.pointerId)) return;
+    if (e.pointerType !== "touch") return;
     const fingers = taps.up(e.pointerId, e.timeStamp, e.type === "pointercancel");
     if (fingers) onTap(fingers);
-    if (touches.size >= 2) {
-      repan(); // three fingers down to two: keep scrolling from the new centroid
-      return;
-    }
-    const trail = pan?.trail ?? [];
-    pan = null;
-    if (e.type === "pointercancel" || trail.length < 2) return;
-    // Carry on in the direction of the flick, slowing down, like native scrolling.
-    const [t0, y0] = trail[0];
-    const [t1, y1] = trail[trail.length - 1];
-    if (e.timeStamp - t1 > 80) return; // the fingers had stopped before lifting
-    let v = (y0 - y1) / Math.max(1, t1 - t0); // px per ms, positive scrolls down
-    let last = performance.now();
-    const step = (now: number) => {
-      const dt = now - last;
-      last = now;
-      globalThis.scrollBy(0, v * dt);
-      v *= Math.pow(0.995, dt);
-      glide = Math.abs(v) > 0.02 ? requestAnimationFrame(step) : 0;
-    };
-    glide = requestAnimationFrame(step);
   };
   area.addEventListener("pointerup", release);
   area.addEventListener("pointercancel", release);

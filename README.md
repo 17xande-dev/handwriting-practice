@@ -33,19 +33,27 @@ change the TypeScript: the bundle is checked in, so `go build` alone works.
 
 ### Pencil input
 
-All of it is in `web/pen.ts`, using Pointer Events:
+All of it is in `web/pen.ts`. Writing uses Pointer Events; scrolling is
+Safari's own, gated with Touch Events.
 
-- Everything below the toolbar is one writing area that the app handles
-  itself. It has `touch-action: none` and no text selection, so a hand resting
-  on the glass can't scroll, zoom or select anything. There:
+- Everything below the toolbar is one writing area with no text selection,
+  no callout and no zooming (`touch-action: pan-y`). There:
   - only `pointerType === "pen"` writes, and only on a practice line;
-  - **two fingers scroll**, with momentum;
-  - **one finger does nothing**, so a resting palm is harmless. Contact size
-    can't tell a palm from a finger: Safari reports fingertips 63–125px wide
-    on an iPad Air, as measured on the device;
-  - touches landing within 500ms of the Pencil are ignored as a palm;
+  - the **Pencil never scrolls**: its `touchstart` is cancelled when Safari
+    reports `touchType` "stylus";
+  - **two fingers scroll** natively, with Safari's own momentum;
+  - **one finger, or a palm, doesn't scroll**: its moves are cancelled while
+    it is the only touch down. Contact size can't tell a palm from a finger
+    (Safari reports fingertips 63–125px wide on an iPad Air), so the finger
+    count is the palm rejection. While the Pencil is on the glass, iPadOS
+    stops delivering finger touches at all;
   - "Finger draws" in the toolbar lets one finger or a mouse write, for
     testing on a desktop.
+- Scrolling from script was tried and dropped. On the iPad, Safari reports a
+  touch's `clientY` and `screenY` shifted by however far script has scrolled
+  the page, so moving the page by the fingers' travel fed back into itself.
+  Measured on the device, the page swung thousands of pixels each frame,
+  then, with screen coordinates, still reversed direction on most frames.
 - **Undo and redo** cover the whole sheet: every stroke and every Clear is an
   edit, undone in order whichever line it was on (`web/history.ts`). There
   are toolbar buttons, a quick **two-finger tap** to undo and **three-finger

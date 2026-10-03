@@ -63,7 +63,9 @@ export class History {
     if (!el || typeof el.getBoundingClientRect !== "function") return;
     const r = el.getBoundingClientRect();
     if (r.bottom < 0 || r.top > globalThis.innerHeight) {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      // Instant, not smooth: an animated scroll still running when the
+      // fingers start scrolling again fights them, and the page jumps about.
+      el.scrollIntoView({ block: "center", behavior: "instant" });
     }
   }
 }

@@ -316,12 +316,13 @@ span.tile-art {
 }
 
 /* ---- Writing area -------------------------------------------------------
-   Everything below the toolbar. The hand rests here while writing, so the
-   browser's own touch handling is switched off: no selection, no callout,
-   no native panning. web/pen.ts scrolls for a finger and ignores palms. */
+   Everything below the toolbar. The hand rests here while writing, so there
+   is no selection and no callout, and no zooming. Vertical scrolling is the
+   browser's own, gated by web/pen.ts: two fingers scroll, while one finger,
+   a palm or the Pencil doesn't. */
 
 .writing-area {
-  touch-action: none;
+  touch-action: pan-y;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
@@ -398,9 +399,9 @@ span.tile-art {
   box-shadow: 0 0 0 1px var(--rule);
 
   canvas {
-    /* The Pencil must never scroll, zoom, select or magnify. Fingers scroll
-       the page from script instead (see web/pen.ts). */
-    touch-action: none;
+    /* Two fingers may scroll the page from here too; the Pencil is stopped
+       from scrolling by web/pen.ts, and nothing zooms, selects or magnifies. */
+    touch-action: pan-y;
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
