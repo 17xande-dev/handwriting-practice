@@ -71,6 +71,7 @@ func New(fontList []fonts.Font, log *slog.Logger) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /sheet/{slug}", s.sheet)
+	mux.HandleFunc("GET /progress", s.progress)
 	mux.HandleFunc("GET /practice/new", s.customForm)
 	mux.HandleFunc("POST /practice/new", s.customForm)
 	mux.HandleFunc("POST /practice", s.custom)
@@ -208,4 +209,10 @@ func (s *Server) custom(w http.ResponseWriter, r *http.Request) {
 		Text:   text,
 		Custom: true,
 	})
+}
+
+// progress is the history page. The history itself lives in the browser
+// (IndexedDB) and is drawn by script; the server only serves the frame.
+func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
+	s.render(w, http.StatusOK, "progress.html", page{Title: "Progress"})
 }

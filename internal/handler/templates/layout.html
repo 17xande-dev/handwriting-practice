@@ -12,11 +12,13 @@
 <link rel="stylesheet" href="{{asset "font.css"}}">
 <link rel="stylesheet" href="{{asset "styles.css"}}">
 <script type="module" src="{{asset "app.js"}}"></script>
+{{- block "scripts" .}}{{end}}
 </head>
 <body>
 <header class="site-header">
   <div class="inner">
     <a class="brand" href="/">Italic practice</a>
+    <nav class="site-nav"><a href="/">Worksheets</a> <a href="/progress">Progress</a></nav>
   </div>
 </header>
 <main>

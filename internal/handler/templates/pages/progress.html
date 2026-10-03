@@ -1,0 +1,73 @@
+{{define "scripts"}}
+<script type="module" src="{{asset "progress.js"}}"></script>
+{{- end}}
+
+{{define "content"}}
+<div class="inner progress" id="progress">
+  <h1>Progress</h1>
+  <p class="lede">Every line you check is kept here, on this device only.</p>
+
+  <p class="progress-empty" id="progress-empty" hidden>
+    Nothing checked yet. Copy a line on a <a href="/">worksheet</a>, then tap
+    <strong>Check</strong> or <strong>Check my writing</strong>; your scores
+    will build up here.
+  </p>
+
+  <div class="progress-body" id="progress-body" hidden>
+    <fieldset class="range" aria-label="Time range">
+      <label><input type="radio" name="range" value="30" checked> 30 days</label>
+      <label><input type="radio" name="range" value="90"> 90 days</label>
+      <label><input type="radio" name="range" value="all"> All time</label>
+    </fieldset>
+
+    <div class="stat-tiles" id="stat-tiles"></div>
+
+    <section class="chart-card" aria-labelledby="score-heading">
+      <h2 id="score-heading">Score over time</h2>
+      <p class="chart-sub" id="score-sub"></p>
+      <ul class="chart-legend">
+        <li><span class="key key-line" aria-hidden="true"></span>Daily average</li>
+        <li><span class="key key-dot" aria-hidden="true"></span>Each line checked</li>
+      </ul>
+      <div class="chart-box"><canvas id="chart-score" role="img" aria-label="Line score by day"></canvas></div>
+      <details>
+        <summary>Show as a table</summary>
+        <table class="data-table" id="table-score"></table>
+      </details>
+    </section>
+
+    <section class="chart-card" aria-labelledby="exercise-heading">
+      <h2 id="exercise-heading">Exercises</h2>
+      <p class="chart-sub">Lines checked per worksheet.</p>
+      <div class="chart-box chart-box-bars" id="exercise-box"><canvas id="chart-exercises" role="img" aria-label="Lines checked per worksheet"></canvas></div>
+      <table class="data-table" id="table-exercises"></table>
+    </section>
+
+    <section class="chart-card" aria-labelledby="letter-heading">
+      <h2 id="letter-heading">Letters</h2>
+      <p class="chart-sub" id="letter-sub"></p>
+      <div class="chart-box"><canvas id="chart-letters" role="img" aria-label="Average score per letter"></canvas></div>
+      <details>
+        <summary>Show as a table</summary>
+        <table class="data-table" id="table-letters"></table>
+      </details>
+    </section>
+  </div>
+
+  <section class="history-tools" aria-labelledby="history-heading">
+    <h2 id="history-heading">Your history</h2>
+    <p>
+      It is stored in this browser, so it stays on this iPad and nothing is sent
+      anywhere. Safari can clear a site's storage if it isn't used for a while;
+      adding this page to the Home Screen keeps it, and a backup file keeps it
+      safe for good.
+    </p>
+    <div class="history-actions">
+      <button type="button" id="export-history">Save a backup</button>
+      <label class="button-like">Restore a backup<input type="file" id="import-history" accept="application/json,.json"></label>
+      <button type="button" id="clear-history">Clear history</button>
+    </div>
+    <p class="history-status" id="history-status" role="status"></p>
+  </section>
+</div>
+{{end}}

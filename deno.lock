@@ -2,7 +2,8 @@
   "version": "5",
   "specifiers": {
     "jsr:@std/assert@^1.0.19": "1.0.19",
-    "jsr:@std/internal@^1.0.12": "1.0.14"
+    "jsr:@std/internal@^1.0.12": "1.0.14",
+    "npm:chart.js@4.5.1": "4.5.1"
   },
   "jsr": {
     "@std/assert@1.0.19": {
@@ -15,9 +16,21 @@
       "integrity": "291516b3d4c35024d6ffbc0a9df5bf4c64116e05b50012cf846710152d2ffdf7"
     }
   },
+  "npm": {
+    "@kurkle/color@0.3.4": {
+      "integrity": "sha512-M5UknZPHRu3DEDWoipU6sE8PdkZ6Z/S+v4dD+Ke8IaNlpdSQah50lz1KtcFBa2vsdOnwbbnxJwVM4wty6udA5w=="
+    },
+    "chart.js@4.5.1": {
+      "integrity": "sha512-GIjfiT9dbmHRiYi6Nl2yFCq7kkwdkp1W/lp2J99rX0yo9tgJGn3lKQATztIjb5tVtevcBtIdICNWqlq5+E8/Pw==",
+      "dependencies": [
+        "@kurkle/color"
+      ]
+    }
+  },
   "workspace": {
     "dependencies": [
-      "jsr:@std/assert@^1.0.19"
+      "jsr:@std/assert@^1.0.19",
+      "npm:chart.js@4.5.1"
     ]
   }
 }

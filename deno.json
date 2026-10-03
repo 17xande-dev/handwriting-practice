@@ -1,24 +1,33 @@
 {
   "compilerOptions": {
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
   "tasks": {
-    "bundle": "deno bundle --platform=browser --minify --output=internal/handler/static/app.js web/main.ts",
+    "bundle": "deno bundle --platform=browser --minify --output=internal/handler/static/app.js web/main.ts && deno bundle --platform=browser --minify --output=internal/handler/static/progress.js web/progress.ts",
     "check": "deno check web/",
     "test": "deno test web/"
   },
   "fmt": {
-    "include": ["web/"],
+    "include": [
+      "web/"
+    ],
     "lineWidth": 100
   },
   "lint": {
-    "include": ["web/"]
+    "include": [
+      "web/"
+    ]
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@^1.0.19"
+    "@std/assert": "jsr:@std/assert@^1.0.19",
+    "chart.js": "npm:chart.js@4.5.1"
   }
 }

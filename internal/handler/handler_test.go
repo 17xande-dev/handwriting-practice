@@ -37,7 +37,7 @@ func get(t *testing.T, h http.Handler, target string) (*http.Response, string) {
 // servedPages is every HTML page the app serves, so the page-wide rules below
 // cover a worksheet added tomorrow without anyone remembering to list it.
 func servedPages() []string {
-	p := []string{"/", "/sheet/no-such-sheet", "/practice/new"}
+	p := []string{"/", "/sheet/no-such-sheet", "/practice/new", "/progress"}
 	for _, s := range sheets.All() {
 		p = append(p, "/sheet/"+s.Slug)
 	}
@@ -401,5 +401,28 @@ func TestCustomTextIsEscaped(t *testing.T) {
 		if strings.Contains(body, "<script>alert") || strings.Contains(body, "<img src=x") || strings.Contains(body, `"><b>`) {
 			t.Errorf("POST %s: unescaped user text in page", u)
 		}
+	}
+}
+
+// The progress page loads its own bundle (Chart.js lives only there), and
+// worksheets don't pay for it.
+func TestProgressPageLoadsItsOwnBundle(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	res, body := get(t, h, "/progress")
+	if res.StatusCode != 200 || !strings.Contains(body, `id="progress"`) {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	m := regexp.MustCompile(`src="(/static/progress\.js\?v=[0-9a-f]+)"`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("progress page doesn't load progress.js")
+	}
+	if r, _ := get(t, h, m[1]); r.StatusCode != 200 {
+		t.Errorf("%s: status %d", m[1], r.StatusCode)
+	}
+	if _, sheet := get(t, h, "/sheet/arches"); strings.Contains(sheet, "progress.js") {
+		t.Error("worksheet loads the progress bundle")
+	}
+	if !strings.Contains(body, `href="/progress"`) {
+		t.Error("no link to the progress page")
 	}
 }

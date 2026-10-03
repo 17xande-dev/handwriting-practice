@@ -123,7 +123,7 @@
   <h1>{{.Sheet.Title}}</h1>
   <p class="lede">{{.Sheet.Note}}</p>
 
-  <ol class="rows" id="rows">
+  <ol class="rows" id="rows" data-sheet="{{if .Custom}}custom{{else}}{{.Sheet.Slug}}{{end}}" data-title="{{.Sheet.Title}}">
     {{- range $i, $line := .Sheet.Lines}}
     <li class="row">
       <div class="band reference">

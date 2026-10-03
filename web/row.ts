@@ -62,6 +62,15 @@ export class Row {
   #showResult = true;
   /** Called after this row is checked or its check is cleared. */
   onResult: () => void = () => {};
+  /**
+   * Called with a check worth keeping in the progress history: the first
+   * check of each version of the writing. Checking again without writing
+   * anything new isn't another attempt.
+   */
+  onRecord: (r: CheckResult, pen: "monoline" | "edged") => void = () => {};
+  /** Bumped whenever the writing changes; the version last recorded. */
+  #version = 0;
+  #recorded = -1;
   #strokes: Stroke[] = [];
   #live: Stroke | null = null;
   #predicted: Point[] = [];
@@ -193,6 +202,10 @@ export class Row {
     if (!this.#font || this.#strokes.length === 0) return null;
     this.#result = check(this.#text, this.#font, this.#strokes);
     this.#showResult = true;
+    if (this.#result && this.#recorded !== this.#version) {
+      this.#recorded = this.#version;
+      this.onRecord(this.#result, this.#strokes[this.#strokes.length - 1].pen.kind);
+    }
     this.#renderResult();
     this.#rebuildBase();
     this.#draw();
@@ -266,7 +279,9 @@ export class Row {
     this.#undo.disabled = n === 0;
     this.#clear.disabled = n === 0;
     this.#check.disabled = n === 0;
-    // Anything written, undone or cleared makes the last check stale.
+    // Anything written, undone or cleared makes the last check stale, and
+    // makes the next check a new attempt.
+    this.#version++;
     this.#clearResult();
     // Exposed for tests and the browser console; not used by the app itself.
     this.#practice.canvas.dataset.strokes = String(n);

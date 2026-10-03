@@ -164,6 +164,46 @@ model's own centreline (100%), and from altered copies:
 
 Open the worksheet with `#debug` to get these helpers in the console.
 
+### Progress
+
+Every check is kept on the device, and **Progress** (in the header) shows it.
+Each saved line records when it was checked, the worksheet and line, the
+model font, the pen, the score, each letter's score and the slant/size
+measurements. A line is recorded once per version of the writing: pressing
+Check again without writing anything isn't another attempt.
+
+The page has:
+- a time range (30 days, 90 days, all time) above everything it filters;
+- headline tiles: the average over the last 14 days with its change on the
+  fortnight before, lines checked, days practised and the current streak;
+- **Score over time**: the daily average as a line, each checked line as a
+  faint dot, on a real date axis, with the trend in words ("improving by
+  about 5 points a week", from a straight-line fit of the daily averages);
+- **Exercises**: lines checked per worksheet, and a table of days practised,
+  average, best, first-day-to-latest change and the last date;
+- **Letters**: the average score per letter, with the three weakest (of
+  letters written at least three times) in blue.
+
+Every chart has a table view, so no value depends on a tooltip or on colour.
+The chart colours (one blue, one context grey) were checked with the dataviz
+palette validator. The grey is below 3:1 contrast on white, which is why the
+tables are always there.
+
+**Storage.** For now the history is in the browser's IndexedDB
+(`web/progress-store.ts`). Nothing is sent to the server and there are no
+accounts. Everything goes through a `ProgressStore` interface, so a
+server-backed store with accounts can replace it without the pages changing.
+Safari can clear a site's storage after a period without use, so the page
+offers **Save a backup** (a JSON file) and **Restore a backup**. A restore
+merges, skips lines already present, and validates every entry, since the
+file comes from outside. Adding the app to the Home Screen also keeps its
+storage.
+
+**Charts** use Chart.js 4.5.1 (MIT), imported per chart type and bundled
+into its own `progress.js`, loaded only on the progress page: 178 KB
+minified, 62 KB gzipped. Web Awesome was considered, but it has no chart
+components.
+
 ### Your own text
 
 "Your own text" on the index takes typed or pasted text and turns each line
@@ -192,7 +232,7 @@ the form isn't empty next time. There is no sharing, by design.
 |---|---|---|
 | Sharing a custom exercise | A server-stored exercise behind an unguessable id, perhaps with an owner | Wanting to send an exercise to someone. Putting the text in the URL was rejected (see "Your own text"). |
 | Judging stroke order and direction | Comparing against hand-authored stroke paths per letter | Wanting feedback on how letters are made, not just their shape |
-| Saving practice | IndexedDB on the device; SQLite on the server | Wanting history, or work surviving a reload |
+| Progress on a server, with accounts | A server `ProgressStore` (SQLite) behind sign-in | Wanting history across devices, or safe from Safari clearing storage |
 | Fonts from outside Google | Self-hosted or other font services | Wanting a font Google doesn't have. The picker is Google-only so the CSP stays at two fixed origins. |
 | Stroke-order models | Hand-authored SVG paths per letter | Wanting animated stroke order or direction arrows, which a font can't give |
 | Getty-Dubay proportions | Fixed guide ratios instead of the font's measured ones | A model font whose proportions stray from the hand |
