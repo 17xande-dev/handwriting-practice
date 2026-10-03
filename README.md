@@ -198,3 +198,9 @@ the form isn't empty next time. There is no sharing, by design.
 | Getty-Dubay proportions | Fixed guide ratios instead of the font's measured ones | A model font whose proportions stray from the hand |
 | htmx / Web Awesome | Add when a server round-trip or a complex control needs them | Saving or account features. v1 has neither. |
 | Dark mode | Ink and guide colours for a dark page | Requests for it. The page imitates paper, so it's light only for now. |
+
+## Licence
+
+The app's code is under the MIT licence (`LICENSE`). The bundled Briem Hand
+fonts are under the SIL Open Font License 1.1 (`third_party/briem-hand/OFL.txt`);
+the fonts loaded from Google Fonts are under their own licences, also OFL.
