@@ -2,9 +2,9 @@
 
 import { assert, assertAlmostEquals, assertEquals } from "@std/assert";
 import {
+  credit,
   distanceTransform,
   dtw,
-  invert,
   raster,
   sample,
   scoreLetter,
@@ -71,21 +71,30 @@ Deno.test("dtw recovers a known stretch", () => {
     assert(Math.abs(map[x] - x * 1.5) <= 3, `model ${x} → ${map[x]}, want ~${x * 1.5}`);
   }
   for (let i = 1; i < map.length; i++) assert(map[i] >= map[i - 1], "map not monotonic");
-  const back = invert(map, 150);
-  assert(Math.abs(back[75] - 50) <= 3, `user 75 → ${back[75]}`);
   assertAlmostEquals(sample([0, 2, 4], 1.5), 3);
 });
 
-// The score must rank writing on the model above writing beside it, above
-// no writing at all.
-Deno.test("scores order identical > shifted > absent", () => {
-  const tol = 4;
-  const exact = scoreLetter([0, 0, 1, 0.5], [0, 1, 0.5, 2], tol);
-  const shifted = scoreLetter([6, 7, 3, 9], [8, 6, 7, 2], tol);
-  const absent = scoreLetter([], [30, 40, 50], tol);
+// The score must rank writing on the model's centreline above writing a
+// little off it, above writing well off it, above no writing at all.
+Deno.test("scores fall off with distance from the centreline", () => {
+  const [full, zero] = [2, 8];
+  const exact = scoreLetter([0, 1, 0.5, 2], [0, 1, 0.5, 2], full, zero);
+  const near = scoreLetter([3, 4, 3, 5], [3, 4, 4, 3], full, zero);
+  const far = scoreLetter([6, 7, 9, 12], [8, 6, 7, 10], full, zero);
+  const absent = scoreLetter([], [30, 40, 50], full, zero);
   assertEquals(exact.score, 100);
-  assert(shifted.score < exact.score && shifted.score > absent.score, `shifted ${shifted.score}`);
+  assert(
+    near.score < exact.score && near.score > far.score,
+    `near ${near.score}, far ${far.score}`,
+  );
+  assert(far.score > absent.score, `far ${far.score}`);
   assertEquals(absent.score, 0);
   assert(absent.missing);
-  assert(!shifted.missing);
+  assert(!far.missing);
+});
+
+Deno.test("credit is full, then linear, then none", () => {
+  assertEquals(credit(1, 2, 8), 1);
+  assertEquals(credit(5, 2, 8), 0.5);
+  assertEquals(credit(9, 2, 8), 0);
 });

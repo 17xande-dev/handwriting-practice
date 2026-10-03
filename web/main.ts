@@ -4,6 +4,7 @@
 import { type Metrics, modelStrokes, notes } from "./evaluate.ts";
 import { median } from "./evalcore.ts";
 import { familyList, loadGoogleFont, validFamilyName } from "./googlefont.ts";
+import { History } from "./history.ts";
 import { measureFont, measureSlant } from "./measure.ts";
 import { drawPreview } from "./preview.ts";
 import { attachWritingArea } from "./pen.ts";
@@ -55,10 +56,16 @@ function main() {
   };
 
   const toolbar = new Toolbar(form);
+  const history = new History();
+  attachHistory(history);
   const area = document.getElementById("writing-area") ?? rowsEl;
-  attachWritingArea(area, () => toolbar.read().touchWrites);
+  // A quick two-finger tap undoes and a three-finger tap redoes.
+  attachWritingArea(area, () => toolbar.read().touchWrites, (fingers) => {
+    if (fingers === 2) history.undo();
+    else if (fingers === 3) history.redo();
+  });
   const rows = [...rowsEl.querySelectorAll<HTMLElement>(".row")].map(
-    (el) => new Row(el, () => toolbar.read(), theme),
+    (el) => new Row(el, () => toolbar.read(), theme, history),
   );
 
   const preview = document.getElementById("pen-preview");
@@ -192,6 +199,33 @@ function main() {
       });
     };
   }
+}
+
+/**
+ * The toolbar's Undo and Redo buttons, and the keyboard shortcuts for a
+ * keyboard attached to the iPad (or a desktop): ⌘/Ctrl+Z, ⇧⌘/Ctrl+Z and Ctrl+Y.
+ */
+function attachHistory(history: History) {
+  const undo = document.getElementById("undo");
+  const redo = document.getElementById("redo");
+  if (!(undo instanceof HTMLButtonElement) || !(redo instanceof HTMLButtonElement)) return;
+  undo.addEventListener("click", () => history.undo());
+  redo.addEventListener("click", () => history.redo());
+  history.onChange(() => {
+    undo.disabled = !history.canUndo;
+    redo.disabled = !history.canRedo;
+  });
+  document.addEventListener("keydown", (e) => {
+    // A text field keeps its own undo (the Google Fonts name, say).
+    const t = e.target;
+    if (t instanceof Element && t.closest("input[type=text], textarea")) return;
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    const key = e.key.toLowerCase();
+    if (key === "z" && !e.shiftKey) history.undo();
+    else if ((key === "z" && e.shiftKey) || key === "y") history.redo();
+    else return;
+    e.preventDefault();
+  });
 }
 
 /**

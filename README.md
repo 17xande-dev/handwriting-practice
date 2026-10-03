@@ -46,6 +46,13 @@ All of it is in `web/pen.ts`, using Pointer Events:
   - touches landing within 500ms of the Pencil are ignored as a palm;
   - "Finger draws" in the toolbar lets one finger or a mouse write, for
     testing on a desktop.
+- **Undo and redo** cover the whole sheet: every stroke and every Clear is an
+  edit, undone in order whichever line it was on (`web/history.ts`). There
+  are toolbar buttons, a quick **two-finger tap** to undo and **three-finger
+  tap** to redo, and ⌘/Ctrl+Z, ⇧⌘/Ctrl+Z and Ctrl+Y on a keyboard. A tap
+  counts only if the fingers land within 120 ms of each other, move under
+  12 px and lift within 350 ms, with no Pencil in between (`TapTracker`), so
+  scrolling and resting palms don't undo anything.
 - `getCoalescedEvents()` recovers the Pencil's full sample rate (up to 240Hz)
   between frames; `getPredictedEvents()`, where the browser has it, draws a
   short predicted tail to hide a frame of latency.
@@ -144,9 +151,16 @@ slant.
    column is described by the ink in the ascender, x-height and descender
    zones. This absorbs where the line starts and how widely it is spaced,
    while keeping letters in order.
-3. Per letter, *precision* is the share of the user's ink within 0.1
-   x-height of the model's ink, and *coverage* is the share of the model's
-   centreline the user's ink reached. The letter score is their average.
+3. Per letter, the user's line is compared with the model's **centreline**
+   (its skeleton), not its filled ink: against a heavy model like Briem, any
+   thin line inside the stroke would otherwise score perfectly however uneven
+   it was. *Precision* credits each point of the user's line by its distance
+   from the centreline, and *coverage* credits each point of the centreline
+   by its distance from the user's line. Credit is full within 0.04 x-height
+   and falls linearly to none at 0.2, so a wobbly line scores proportionately
+   lower. The letter score is the average of the two. The alignment places
+   each letter but stretches it only linearly inside, so a misshapen letter
+   isn't warped back into shape.
 4. Slant is measured from the user's straight downstrokes and compared with
    the model's own, measured the same way. Size, width and baseline are
    compared on letters that sit in the x-height band. The line score is the
@@ -158,8 +172,10 @@ direction and pen lifts aren't judged, and a model font's letters are a
 stand-in for a teacher's. Tested in Chrome by writing each line from the
 model's own centreline (100%), and from altered copies:
 - shifted right: still 100%;
-- 30% too tall: about 75%, with an x-height note;
-- leaning 8° more: 88%, with a slant note;
+- wobbling about the centreline by a typical 0.06 / 0.10 / 0.15 x-height:
+  77% / 63% / 52% on Briem Hand Unjoined, 86% / 78% / 62% on Edu SA
+  (before centreline scoring, the same lines scored 99–100% on Briem);
+- 30% too tall, or leaning 8° more: lower, with an x-height or slant note;
 - a letter left out: marked missing.
 
 Open the worksheet with `#debug` to get these helpers in the console.

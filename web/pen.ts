@@ -7,6 +7,7 @@
 //
 //  - the Pencil writes on a practice line, and does nothing anywhere else;
 //  - two fingers scroll the page, from script, with momentum;
+//  - a quick two-finger tap undoes, a three-finger tap redoes;
 //  - a single touch does nothing, so a resting palm is harmless.
 //
 // Contact size can't separate a palm from a finger: Safari reports fingertips
@@ -100,10 +101,70 @@ export function attachPen(canvas: HTMLCanvasElement, h: PenHandlers): void {
 }
 
 /**
+ * Recognises quick multi-finger taps: two fingers for undo, three for redo.
+ * A tap is fingers that land together, stay put and lift quickly, so a
+ * two-finger scroll (they move), a resting palm (it stays down, and lands as
+ * one contact) and the Pencil (not a touch) are never mistaken for one.
+ */
+export class TapTracker {
+  /** Fingers must all land within this of the first. */
+  static landWithinMs = 120;
+  /** And all lift within this of the first landing. */
+  static liftWithinMs = 350;
+  /** And none may move further than this. */
+  static slopPx = 12;
+
+  #down = new Map<number, { x: number; y: number }>();
+  #start = 0;
+  #most = 0;
+  #spoiled = false;
+
+  down(id: number, x: number, y: number, t: number) {
+    if (this.#down.size === 0) {
+      this.#start = t;
+      this.#most = 0;
+      this.#spoiled = false;
+    } else if (t - this.#start > TapTracker.landWithinMs) {
+      this.#spoiled = true;
+    }
+    this.#down.set(id, { x, y });
+    this.#most = Math.max(this.#most, this.#down.size);
+  }
+
+  move(id: number, x: number, y: number) {
+    const p = this.#down.get(id);
+    if (p && Math.hypot(x - p.x, y - p.y) > TapTracker.slopPx) this.#spoiled = true;
+  }
+
+  /** The Pencil touched down or moved: whatever the fingers were doing, it wasn't a tap. */
+  pen() {
+    if (this.#down.size) this.#spoiled = true;
+  }
+
+  /**
+   * A finger lifted (or was cancelled). Returns the number of fingers in the
+   * tap when this completes one, otherwise 0.
+   */
+  up(id: number, t: number, cancelled = false): number {
+    if (!this.#down.delete(id)) return 0;
+    if (cancelled) this.#spoiled = true;
+    if (this.#down.size > 0) return 0;
+    const ok = !this.#spoiled && t - this.#start <= TapTracker.liftWithinMs &&
+      this.#most >= 2 && this.#most <= 3;
+    return ok ? this.#most : 0;
+  }
+}
+
+/**
  * Take the writing area over from the browser: no selection, no native
  * gestures, two-finger scrolling from script, single touches ignored.
  */
-export function attachWritingArea(area: HTMLElement, touchWrites: () => boolean): void {
+export function attachWritingArea(
+  area: HTMLElement,
+  touchWrites: () => boolean,
+  onTap: (fingers: number) => void = () => {},
+): void {
+  const taps = new TapTracker();
   // Every touch currently down in the area, and where it last was.
   const touches = new Map<number, { x: number; y: number }>();
   // Scroll state while two or more fingers are down: the centroid it last
@@ -148,6 +209,7 @@ export function attachWritingArea(area: HTMLElement, touchWrites: () => boolean)
   area.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "pen") {
       lastPenActivity = e.timeStamp;
+      taps.pen();
       // The Pencil landing ends any scroll, and clears any stray selection.
       pan = null;
       stopGlide();
@@ -159,16 +221,19 @@ export function attachWritingArea(area: HTMLElement, touchWrites: () => boolean)
     if (e.pointerType !== "touch" || (e.defaultPrevented && touchWrites())) return;
     stopGlide();
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    taps.down(e.pointerId, e.clientX, e.clientY, e.timeStamp);
     repan();
   });
 
   area.addEventListener("pointermove", (e) => {
     if (e.pointerType === "pen") {
       lastPenActivity = e.timeStamp;
+      taps.pen();
       return;
     }
     const t = touches.get(e.pointerId);
     if (!t) return;
+    taps.move(e.pointerId, e.clientX, e.clientY);
     t.x = e.clientX;
     t.y = e.clientY;
     if (!pan) return;
@@ -182,6 +247,8 @@ export function attachWritingArea(area: HTMLElement, touchWrites: () => boolean)
 
   const release = (e: PointerEvent) => {
     if (!touches.delete(e.pointerId)) return;
+    const fingers = taps.up(e.pointerId, e.timeStamp, e.type === "pointercancel");
+    if (fingers) onTap(fingers);
     if (touches.size >= 2) {
       repan(); // three fingers down to two: keep scrolling from the new centroid
       return;

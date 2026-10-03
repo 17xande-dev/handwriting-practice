@@ -13,7 +13,6 @@
 import {
   distanceTransform,
   dtw,
-  invert,
   median,
   type Raster,
   raster,
@@ -27,8 +26,14 @@ import { type FontInfo, fontString } from "./measure.ts";
 
 /** Analysis pixels per x-height. */
 const S = 40;
-/** How far off the model's ink a stroke may wander and still count as on it. */
-const tol = 0.1 * S;
+/**
+ * Credit for a line's distance from the model's centreline: full within
+ * `full`, nothing beyond `zero`, graded between (see evalcore.credit).
+ * 0.04 x-height is about a pencil line's width at writing size; 0.2 is a
+ * clear miss.
+ */
+const full = 0.04 * S;
+const zero = 0.2 * S;
 
 export interface LetterResult {
   char: string;
@@ -212,14 +217,23 @@ export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckRes
     });
   };
   const map = dtw(features(modelSkel, m0, m1), features(user, u0, u1));
-  const back = invert(map, u1 - u0 + 1);
-  const toModelX = (x: number) => m0 + sample(back, x - u0);
+  // DTW places each letter, absorbing where the line starts and how it is
+  // spaced. Within a letter the mapping is a straight stretch between its
+  // ends: warping freely inside a letter would bend a misshapen letter back
+  // into shape (squeeze a too-wide arch) and hide exactly what the check is for.
   const toUserX = (x: number) => u0 + sample(map, x - m0);
+  const userBounds = bounds.map(toUserX);
+  for (let i = 1; i < userBounds.length; i++) {
+    userBounds[i] = Math.max(userBounds[i], userBounds[i - 1]); // keep it monotonic
+  }
+  const toModelX = (x: number) => piecewise(userBounds, bounds, x);
 
   // The user's ink moved into the model's frame, letter for letter.
   const warped = userSamples.map(([x, y]) => [toModelX(x), y] as [number, number]);
   const warpedRaster = plot(W, H, warped);
-  const dtModel = distanceTransform(model);
+  // Distance to the model's centreline, not its ink: a thin line anywhere
+  // inside a thick stroke would otherwise count as perfect.
+  const dtModel = distanceTransform(modelSkel);
   const dtUser = distanceTransform(warpedRaster);
   const at = (dt: Float32Array, x: number, y: number) =>
     dt[
@@ -258,7 +272,7 @@ export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckRes
   const sizes: number[] = [], widths: number[] = [], baselines: number[] = [];
   chars.forEach((char, i) => {
     if (modelToUser[i].length === 0) return; // a space, or nothing drawn
-    const s = scoreLetter(userToModel[i], modelToUser[i], tol);
+    const s = scoreLetter(userToModel[i], modelToUser[i], full, zero);
     letters.push({ char, score: s.score, missing: s.missing });
     if (s.missing) return;
     const modelWidth = bounds[i + 1] - bounds[i];
@@ -288,7 +302,8 @@ export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckRes
   const pointClass = strokes.map((s) =>
     s.points.map((p) => {
       const d = at(dtModel, toModelX(toX(p.u, p.v)), toY(p.v));
-      return d <= tol ? 0 : d <= 2.5 * tol ? 1 : 2;
+      // Green with full credit, amber while some credit remains, red beyond.
+      return d <= full * 1.5 ? 0 : d <= zero ? 1 : 2;
     })
   );
 
@@ -306,7 +321,7 @@ export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckRes
     if (mx < 0 || mx >= W) continue;
     for (let y = 0; y < H; y++) {
       const k = y * W + mx, o = (y * W + x) * 4;
-      if (modelSkel.data[k] && dtUser[k] > tol * 1.5) {
+      if (modelSkel.data[k] && dtUser[k] > (full + zero) / 2) {
         unwritten.push([x, y]); // a part of the letter never written
       }
       if (model.data[k]) {
@@ -387,6 +402,20 @@ function trace(m: ModelRender): Stroke[] {
     });
   }
   return strokes;
+}
+
+/**
+ * Map x through matching breakpoints `from` → `to`, linearly between them and
+ * with a slope of 1 beyond the ends. Zero-width spans map to their start.
+ */
+function piecewise(from: number[], to: number[], x: number): number {
+  const n = from.length;
+  if (x <= from[0]) return to[0] + (x - from[0]);
+  if (x >= from[n - 1]) return to[n - 1] + (x - from[n - 1]);
+  let k = 0;
+  while (k < n - 2 && x >= from[k + 1]) k++;
+  const span = from[k + 1] - from[k];
+  return span > 0 ? to[k] + ((x - from[k]) * (to[k + 1] - to[k])) / span : to[k];
 }
 
 function plot(w: number, h: number, pts: Array<[number, number]>): Raster {

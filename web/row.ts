@@ -6,6 +6,7 @@ import { drawGuides, type GuideColors } from "./guides.ts";
 import { check, type CheckResult, colouredRuns, deviationColors, drawOverlay } from "./evaluate.ts";
 import { drawStroke, type Point, type Stroke } from "./ink.ts";
 import { type FontInfo, fontString } from "./measure.ts";
+import type { History } from "./history.ts";
 import { attachPen, type Sample } from "./pen.ts";
 import type { Settings } from "./settings.ts";
 
@@ -49,7 +50,6 @@ export class Row {
   #practice: Surface;
   /** Guides plus every committed stroke, so a frame is one blit plus the live stroke. */
   #base: Surface;
-  #undo: HTMLButtonElement;
   #clear: HTMLButtonElement;
   #check: HTMLButtonElement;
   #resultEl: HTMLElement;
@@ -78,28 +78,32 @@ export class Row {
 
   #settings: () => Settings;
   #theme: Theme;
+  #history: History;
 
-  constructor(el: HTMLElement, settings: () => Settings, theme: Theme) {
+  constructor(el: HTMLElement, settings: () => Settings, theme: Theme, history: History) {
     this.#el = el;
     this.#settings = settings;
     this.#theme = theme;
+    this.#history = history;
     this.#text = el.querySelector(".model")?.textContent?.trim() ?? "";
     this.#ref = surface(el.querySelector(".reference canvas") as HTMLCanvasElement);
     this.#practice = surface(el.querySelector(".practice canvas") as HTMLCanvasElement);
     this.#base = surface(document.createElement("canvas"));
-    this.#undo = el.querySelector('[data-action="undo"]') as HTMLButtonElement;
     this.#clear = el.querySelector('[data-action="clear"]') as HTMLButtonElement;
     this.#check = el.querySelector('[data-action="check"]') as HTMLButtonElement;
     this.#resultEl = el.querySelector(".check-result") as HTMLElement;
     this.#check.addEventListener("click", () => this.check());
 
-    this.#undo.addEventListener("click", () => {
-      this.#strokes.pop();
-      this.#changed();
-    });
+    // Clearing is an edit like any other, so it can be undone.
     this.#clear.addEventListener("click", () => {
-      this.#strokes = [];
-      this.#changed();
+      const before = this.#strokes;
+      if (before.length === 0) return;
+      this.#setStrokes([]);
+      this.#history.push({
+        where: el,
+        undo: () => this.#setStrokes(before),
+        redo: () => this.#setStrokes([]),
+      });
     });
 
     attachPen(this.#practice.canvas, {
@@ -115,11 +119,16 @@ export class Row {
         this.#schedule();
       },
       end: () => {
-        if (!this.#live) return;
-        this.#strokes.push(this.#live);
+        const stroke = this.#live;
+        if (!stroke) return;
         this.#live = null;
         this.#predicted = [];
-        this.#changed();
+        this.#setStrokes([...this.#strokes, stroke]);
+        this.#history.push({
+          where: el,
+          undo: () => this.#setStrokes(this.#strokes.filter((s) => s !== stroke)),
+          redo: () => this.#setStrokes([...this.#strokes, stroke]),
+        });
       },
     });
   }
@@ -224,7 +233,8 @@ export class Row {
   #renderResult() {
     const r = this.#result;
     const el = this.#resultEl;
-    this.#check.textContent = r ? "Check again" : "Check";
+    const label = this.#check.querySelector(".label");
+    if (label) label.textContent = r ? "Check again" : "Check";
     el.replaceChildren();
     el.hidden = !r;
     if (!r) return;
@@ -254,6 +264,12 @@ export class Row {
       const ch = document.createElement("span");
       ch.className = "letter-char";
       ch.textContent = l.char;
+      // In the line's own model font, so the letter matches the one it was
+      // compared with. Set through the CSSOM, which the CSP allows.
+      if (this.#font) {
+        ch.style.fontFamily = this.#font.family;
+        ch.style.fontStyle = this.#font.style;
+      }
       const sc = document.createElement("span");
       sc.className = "letter-score";
       sc.textContent = l.missing ? "missing" : `${l.score}`;
@@ -274,9 +290,14 @@ export class Row {
     }
   }
 
+  /** Replace the line's writing (never mutated in place, so edits can hold the old list). */
+  #setStrokes(strokes: Stroke[]) {
+    this.#strokes = strokes;
+    this.#changed();
+  }
+
   #changed() {
     const n = this.#strokes.length;
-    this.#undo.disabled = n === 0;
     this.#clear.disabled = n === 0;
     this.#check.disabled = n === 0;
     // Anything written, undone or cleared makes the last check stale, and

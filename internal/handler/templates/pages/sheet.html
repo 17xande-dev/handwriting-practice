@@ -35,6 +35,17 @@
       <span>Finger draws</span>
     </label>
 
+    <div class="history-buttons" role="group" aria-label="Undo and redo">
+      <button type="button" class="tool-button" id="undo" disabled title="Undo (two-finger tap)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+        <span>Undo</span>
+      </button>
+      <button type="button" class="tool-button" id="redo" disabled title="Redo (three-finger tap)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+        <span>Redo</span>
+      </button>
+    </div>
+
     <div class="sliders">
       <label class="slider" data-pen="monoline">
         <span class="slider-name">Weight</span>
@@ -134,16 +145,24 @@
         <canvas aria-label="Practice line {{inc $i}}: copy “{{$line}}”"></canvas>
       </div>
       <div class="row-actions">
-        <button type="button" data-action="undo" disabled>Undo</button>
-        <button type="button" data-action="clear" disabled>Clear</button>
-        <button type="button" data-action="check" disabled>Check</button>
+        <button type="button" class="icon-button" data-action="clear" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 15.5 13 7a1.5 1.5 0 0 1 2.1 0l3.9 3.9a1.5 1.5 0 0 1 0 2.1L12 20H9z"/><path d="M8.6 10.9l6.5 6.5"/><path d="M12 20h8"/></svg>
+          <span class="label">Clear</span>
+        </button>
+        <button type="button" class="icon-button" data-action="check" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.2 12.4 2.6 2.6 5-5.6"/></svg>
+          <span class="label">Check</span>
+        </button>
       </div>
       <div class="check-result" aria-live="polite" hidden></div>
     </li>
     {{- end}}
   </ol>
   <div class="check-all">
-    <button type="button" class="primary" id="check-all">Check my writing</button>
+    <button type="button" class="primary icon-button" id="check-all">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m8.2 12.4 2.6 2.6 5-5.6"/></svg>
+      <span class="label">Check my writing</span>
+    </button>
     <section class="sheet-summary" id="sheet-summary" aria-live="polite" hidden></section>
   </div>
   <div class="back">

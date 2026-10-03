@@ -178,19 +178,6 @@ export function dtw(
   return Array.from(sum, (s, k) => (count[k] ? s / count[k] : 0));
 }
 
-/** Invert a monotonic map from 0..n-1 onto 0..m-1, linearly, for 0..m-1. */
-export function invert(map: number[], m: number): number[] {
-  const out = new Array<number>(m);
-  let k = 0;
-  for (let j = 0; j < m; j++) {
-    while (k < map.length - 2 && map[k + 1] < j) k++;
-    const a = map[k], b = map[Math.min(k + 1, map.length - 1)];
-    const t = b > a ? Math.min(1, Math.max(0, (j - a) / (b - a))) : 0;
-    out[j] = k + t;
-  }
-  return out;
-}
-
 /** Interpolate a column map at a fractional position. */
 export function sample(map: number[], x: number): number {
   if (map.length === 0) return x;
@@ -204,34 +191,44 @@ export function sample(map: number[], x: number): number {
 export interface LetterScore {
   /** 0–100. */
   score: number;
-  /** Share of the user's ink within tolerance of the model letter, 0–1. */
+  /** How closely the user's line follows the model's centreline, 0–1. */
   precision: number;
-  /** Share of the model letter's centreline the user's ink reached, 0–1. */
+  /** How much of the model's centreline the user's line follows, 0–1. */
   coverage: number;
   /** No ink where the letter should be. */
   missing: boolean;
 }
 
 /**
- * Score one letter from distances already looked up:
- * `userToModel` — for each user ink sample in the letter, its distance to
- * the model's ink; `modelToUser` — for each model centreline pixel in the
- * letter, its distance to the user's ink. Both in pixels, against `tol`.
+ * Credit for one distance: full credit up to `full`, falling linearly to none
+ * at `zero`. Graded rather than in-or-out, so a line that wanders a little
+ * scores a little lower instead of the same as a perfect one.
+ */
+export function credit(d: number, full: number, zero: number): number {
+  return d <= full ? 1 : d >= zero ? 0 : 1 - (d - full) / (zero - full);
+}
+
+/**
+ * Score one letter from distances already looked up, both measured between
+ * centrelines: `userToModel`, for each sample of the user's line, its
+ * distance to the model letter's centreline (its skeleton), and
+ * `modelToUser`, for each pixel of that centreline, its distance to the
+ * user's line. Both in pixels, credited from `full` down to `zero`.
+ *
+ * Centreline to centreline matters for heavy models. Measured against a
+ * thick letter's filled ink, any thin line that stays inside the stroke
+ * would score perfectly, however uneven.
  */
 export function scoreLetter(
   userToModel: number[],
   modelToUser: number[],
-  tol: number,
+  full: number,
+  zero: number,
 ): LetterScore {
-  const within = (
-    xs: number[],
-    t: number,
-  ) => (xs.length ? xs.filter((d) => d <= t).length / xs.length : 0);
-  const precision = within(userToModel, tol);
-  // The model's centreline is reached if the user's line passes near it; a
-  // little more slack than for precision, since a pen line is drawn at its
-  // own centre and the model's skeleton sits mid-stroke.
-  const coverage = within(modelToUser, tol * 1.5);
+  const mean = (xs: number[]) =>
+    xs.length ? xs.reduce((a, d) => a + credit(d, full, zero), 0) / xs.length : 0;
+  const precision = mean(userToModel);
+  const coverage = mean(modelToUser);
   const missing = userToModel.length === 0 && coverage < 0.2;
   const score = missing ? 0 : Math.round(100 * (0.5 * precision + 0.5 * coverage));
   return { score, precision, coverage, missing };
