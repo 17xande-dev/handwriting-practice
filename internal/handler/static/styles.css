@@ -88,6 +88,26 @@ a { color: var(--accent); }
   }
 }
 
+.site-nav { align-items: center; }
+
+/* The GitHub mark (Octicons, MIT), drawn in the text colour. */
+.site-nav .repo {
+  display: inline-flex;
+  padding: var(--gap-xs);
+  border-radius: var(--radius);
+
+  svg { display: block; }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .brand {
   font-weight: 600;
   text-decoration: none;

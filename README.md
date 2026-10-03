@@ -244,3 +244,5 @@ the form isn't empty next time. There is no sharing, by design.
 The app's code is under the MIT licence (`LICENSE`). The bundled Briem Hand
 fonts are under the SIL Open Font License 1.1 (`third_party/briem-hand/OFL.txt`);
 the fonts loaded from Google Fonts are under their own licences, also OFL.
+The GitHub mark in the header is from [Octicons](https://github.com/primer/octicons)
+(MIT), and the charts use [Chart.js](https://www.chartjs.org/) (MIT).

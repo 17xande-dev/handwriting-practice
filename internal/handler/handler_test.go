@@ -426,3 +426,14 @@ func TestProgressPageLoadsItsOwnBundle(t *testing.T) {
 		t.Error("no link to the progress page")
 	}
 }
+
+// Every page links to the source, as the MIT licence invites.
+func TestPagesLinkToSource(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	for _, p := range servedPages() {
+		_, body := get(t, h, p)
+		if !strings.Contains(body, `href="https://github.com/17xande-dev/handwriting-practice"`) {
+			t.Errorf("%s: no link to the GitHub repository", p)
+		}
+	}
+}
