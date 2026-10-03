@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // Slugs are URLs: a duplicate would make one sheet unreachable, and anything
@@ -33,5 +34,37 @@ func TestSheetsAreWellFormed(t *testing.T) {
 	}
 	if _, ok := Get("nope"); ok {
 		t.Error("Get found a sheet that does not exist")
+	}
+}
+
+// A built-in model line longer than a custom one may be would shrink on an
+// iPad to fit the width and stop matching the practice line's size.
+func TestBuiltinLinesFit(t *testing.T) {
+	for _, s := range All() {
+		for _, l := range s.Lines {
+			if n := utf8.RuneCountInString(l); n > WrapAt {
+				t.Errorf("%s: %q is %d runes, over %d", s.Slug, l, n, WrapAt)
+			}
+		}
+	}
+}
+
+// Each section's sheets sit together, so the index shows each heading once,
+// in teaching order: letters, then joins, then beyond lowercase.
+func TestSectionsInTeachingOrder(t *testing.T) {
+	var names []string
+	total := 0
+	for _, sec := range Sections() {
+		names = append(names, sec.Name)
+		total += len(sec.Sheets)
+	}
+	if strings.Join(names, "|") != Letters+"|"+Joins+"|"+Beyond {
+		t.Errorf("sections %q", names)
+	}
+	if total != len(All()) {
+		t.Errorf("sections hold %d sheets, catalogue has %d", total, len(All()))
+	}
+	if All()[0].Slug != "warm-up" {
+		t.Errorf("first sheet %q; movement practice comes first", All()[0].Slug)
 	}
 }

@@ -75,6 +75,38 @@ and size are all sliders.
   nib edge sweeps, so thick and thin strokes come from the stroke direction as
   with a real chisel-edged pen.
 
+### Worksheets
+
+The 17 built-in worksheets (`internal/sheets`) follow what the respected
+italic courses have in common, in three sections:
+
+- **Letters.** Movement comes first: Briem's course starts with zigzags and
+  turns them into letters by adding "recognition points" ("uuu" becomes
+  "uiui" with two dots), so the first sheet is zigzags and patterns. Then
+  the lowercase families: straight lines, branching arches, Briem's
+  b-family (the triangular bowl inverted: b, p), the a-family (the bowl,
+  carried on into u and y), ovals (with Briem's e in two movements),
+  diagonals, and f with t, which share the crossbar join.
+- **Joins**, one kind at a time, as Reynolds, Eager and Getty-Dubay teach
+  them: diagonal joins into n and m, then into round letters, then
+  horizontal joins out of o, f, t, v and w, then the letters that don't
+  join, then Reynolds' "nanbncn…" chains, which join every letter both ways.
+- **Beyond lowercase.** Numerals and punctuation (both on Briem's model
+  strip), capitals (Roman inscriptional proportions, after Reynolds and
+  Eager), spacing drills (after Eager's "Words for Spacing"), and sentences
+  with capitals and punctuation.
+
+Every built-in line fits within 28 characters, so it never shrinks on an
+iPad. A sheet lays every line out at the size its longest line fits, so a
+sheet never mixes sizes. Sources:
+[briem.net handwriting](https://www.briem.net/handwriting) and its desk
+strip; Reynolds, [*Italic Calligraphy & Handwriting*](https://archive.org/details/lloyd-reynolds-italic-calligraphy-and-handwriting-exercises-and-text-taplinger-1969-1);
+Eager, [*The Italic Way to Beautiful Handwriting*](https://archive.org/details/italicwaytobeaut00eage);
+Sassoon & Briem, [*Better Handwriting*](https://archive.org/details/betterhandwritin00sass);
+the Portland [Italic Handwriting Series scope and sequence](https://archive.org/details/ERIC_ED291761)
+for Getty-Dubay. Not covered yet: timed writing for speed (see the open
+decisions below).
+
 ### Model fonts
 
 The model is chosen from the strip above the worksheet title: first a font
@@ -247,6 +279,7 @@ the form isn't empty next time. There is no sharing, by design.
 | Decision | Candidates | What would force it |
 |---|---|---|
 | Sharing a custom exercise | A server-stored exercise behind an unguessable id, perhaps with an owner | Wanting to send an exercise to someone. Putting the text in the URL was rejected (see "Your own text"). |
+| Timed writing | A one-minute mode recording letters per minute in Progress, after Getty-Dubay's *Write Now* | Wanting to build speed once the forms are settled |
 | Judging stroke order and direction | Comparing against hand-authored stroke paths per letter | Wanting feedback on how letters are made, not just their shape |
 | Progress on a server, with accounts | A server `ProgressStore` (SQLite) behind sign-in | Wanting history across devices, or safe from Safari clearing storage |
 | Fonts from outside Google | Self-hosted or other font services | Wanting a font Google doesn't have. The picker is Google-only so the CSP stays at two fixed origins. |

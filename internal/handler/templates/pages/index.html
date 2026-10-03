@@ -2,6 +2,8 @@
 <div class="inner">
   <h1>Worksheets</h1>
   <p class="lede">Copy each model on the ruled line beneath it. Write with the Apple Pencil; scroll with two fingers.</p>
+  {{- range .Sections}}
+  <h2 class="sheet-section">{{.Name}}</h2>
   <ol class="sheet-list">
     {{- range .Sheets}}
     <li>
@@ -11,6 +13,10 @@
       </a>
     </li>
     {{- end}}
+  </ol>
+  {{- end}}
+  <h2 class="sheet-section">Your own</h2>
+  <ol class="sheet-list">
     <li class="own">
       <a href="/practice/new">
         <span class="sheet-title">Your own text</span>

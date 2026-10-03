@@ -85,7 +85,9 @@ function main() {
   const layoutAll = () => {
     const s = toolbar.read();
     const font = measureFont(family(s), s.style, s.slant);
-    for (const r of rows) r.layout(s.xh, font);
+    // One size for the whole sheet: the largest every line fits at.
+    const xh = Math.min(...rows.map((r) => r.fit(s.xh, font)));
+    for (const r of rows) r.layout(xh, font);
   };
 
   // A web font arrives after first paint, and only once something asks for

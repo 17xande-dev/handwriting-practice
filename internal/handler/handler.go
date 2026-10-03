@@ -35,8 +35,9 @@ type page struct {
 	// its variant chips. Default is the variant a worksheet opens with.
 	Groups  []fonts.Group
 	Default string
-	Sheets  []sheets.Sheet
-	Sheet   sheets.Sheet
+	// Sections is the worksheet list as the index shows it, under headings.
+	Sections []sheets.Section
+	Sheet    sheets.Sheet
 	// Text is the user's own exercise text, on the custom pages.
 	Text string
 	// Custom marks a worksheet made from the user's text, which gets an
@@ -136,7 +137,7 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data pag
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	s.render(w, http.StatusOK, "index.html", page{Title: "Worksheets", Sheets: sheets.All()})
+	s.render(w, http.StatusOK, "index.html", page{Title: "Worksheets", Sections: sheets.Sections()})
 }
 
 func (s *Server) sheet(w http.ResponseWriter, r *http.Request) {

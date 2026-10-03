@@ -271,7 +271,9 @@ export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckRes
   const letters: LetterResult[] = [];
   const sizes: number[] = [], widths: number[] = [], baselines: number[] = [];
   chars.forEach((char, i) => {
-    if (modelToUser[i].length === 0) return; // a space, or nothing drawn
+    // A space isn't a letter, even when a neighbour's swash (a joined f's
+    // descender, say) reaches into its slot.
+    if (/\s/.test(char) || modelToUser[i].length === 0) return;
     const s = scoreLetter(userToModel[i], modelToUser[i], full, zero);
     letters.push({ char, score: s.score, missing: s.missing });
     if (s.missing) return;

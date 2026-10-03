@@ -138,6 +138,21 @@ export class Row {
    * for this row if the model would not otherwise fit the width, so a long
    * line on a narrow screen shrinks rather than running off the edge.
    */
+  /**
+   * The largest x-height, up to `xh`, at which this line's model fits the
+   * width. A sheet lays every line out at the smallest of these, so one long
+   * line doesn't leave the sheet at mixed sizes.
+   */
+  fit(xh: number, font: FontInfo): number {
+    const width = this.#el.querySelector(".practice")!.clientWidth;
+    if (width === 0) return xh;
+    const ctx = this.#ref.ctx;
+    ctx.font = fontString(font, xh / font.xRatio);
+    const textWidth = ctx.measureText(this.#text).width;
+    const room = width - 2 * band(xh, width, font.proportions).left;
+    return textWidth > room ? Math.max(12, xh * (room / textWidth)) : xh;
+  }
+
   layout(xh: number, font: FontInfo) {
     // The practice line is the one that must be exact, so it sets the width.
     // The model band sits in the same grid column and is the same width.
@@ -154,13 +169,9 @@ export class Row {
     this.#font = font;
     this.#slant = font.slant;
 
-    const ctx = this.#ref.ctx;
-    ctx.font = fontString(font, xh / font.xRatio);
-    const textWidth = ctx.measureText(this.#text).width;
-    const trial = band(xh, width, font.proportions);
-    const room = width - 2 * trial.left;
-    const fitted = textWidth > room ? Math.max(12, xh * (room / textWidth)) : xh;
-
+    // Normally the sheet has already fitted xh to its longest line; this
+    // only matters for a row laid out on its own.
+    const fitted = this.fit(xh, font);
     const b = band(fitted, width, font.proportions);
     this.#band = b;
     for (const sel of [".reference", ".practice"]) {
