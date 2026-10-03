@@ -84,6 +84,7 @@ The catalogue, in `internal/fonts`:
 | Upright | Playwrite US Modern | 0° | An upright school hand. Edu QLD and Playwrite NZ still slope, and Andika is a print face rather than handwriting. |
 | England semi-joined (+ italic) | Playwrite GB S | 0° / 7° | Playwrite England, semi-joined, upright and italic. |
 | England joined (+ italic) | Playwrite GB J | 0° / 7° | Playwrite England, joined, upright and italic. The joins show within words. |
+| Briem hand | Briem Hand | 3.5° | Gunnlaugur Briem's italic handwriting model, with edged-pen thick and thin. The only Briem family on Google Fonts. |
 
 All are SIL OFL from Google Fonts; the official Getty-Dubay fonts are
 commercial. The Playwrite GB "Guides" variants, which draw their own ruling,

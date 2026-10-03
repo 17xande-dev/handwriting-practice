@@ -99,6 +99,17 @@ var Builtin = []Font{
 		Italic:     true,
 		Slant:      7,
 	},
+	// Gunnlaugur Briem's handwriting model: an italic hand with edged-pen
+	// thick and thin. Upright style only; its letters slope 3.5°, measured
+	// from the ascender stems. Briem's other faces aren't on Google Fonts.
+	{
+		ID:         "briem-hand",
+		Label:      "Briem hand",
+		Family:     "Briem Hand",
+		CSSURL:     "https://fonts.googleapis.com/css2?family=Briem+Hand&display=swap",
+		FileOrigin: "https://fonts.gstatic.com",
+		Slant:      3.5,
+	},
 }
 
 var (
