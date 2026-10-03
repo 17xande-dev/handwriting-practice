@@ -274,6 +274,19 @@ span.tile-art {
   &:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 }
 
+/* ---- Writing area -------------------------------------------------------
+   Everything below the toolbar. The hand rests here while writing, so the
+   browser's own touch handling is switched off: no selection, no callout,
+   no native panning. web/pen.ts scrolls for a finger and ignores palms. */
+
+.writing-area {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* ---- Practice rows ------------------------------------------------------- */
 
 .rows {

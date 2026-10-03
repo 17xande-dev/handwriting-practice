@@ -3,6 +3,7 @@
 
 import { defaultProportions } from "./geometry.ts";
 import { drawPreview } from "./preview.ts";
+import { attachWritingArea } from "./pen.ts";
 import { type FontInfo, Row, type Theme } from "./row.ts";
 import { type Settings, Toolbar } from "./settings.ts";
 
@@ -51,6 +52,8 @@ function main() {
   };
 
   const toolbar = new Toolbar(form);
+  const area = document.getElementById("writing-area") ?? rowsEl;
+  attachWritingArea(area, () => toolbar.read().touchWrites);
   const rows = [...rowsEl.querySelectorAll<HTMLElement>(".row")].map(
     (el) => new Row(el, () => toolbar.read(), theme),
   );
