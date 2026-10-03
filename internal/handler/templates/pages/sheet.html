@@ -136,10 +136,16 @@
       <div class="row-actions">
         <button type="button" data-action="undo" disabled>Undo</button>
         <button type="button" data-action="clear" disabled>Clear</button>
+        <button type="button" data-action="check" disabled>Check</button>
       </div>
+      <div class="check-result" aria-live="polite" hidden></div>
     </li>
     {{- end}}
   </ol>
+  <div class="check-all">
+    <button type="button" class="primary" id="check-all">Check my writing</button>
+    <section class="sheet-summary" id="sheet-summary" aria-live="polite" hidden></section>
+  </div>
   <div class="back">
     {{- if .Custom}}
     <form method="post" action="/practice/new">

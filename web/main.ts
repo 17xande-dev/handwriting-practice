@@ -1,6 +1,8 @@
 // Entry point: wires the toolbar to the pen preview and every row on a
 // worksheet page.
 
+import { type Metrics, modelStrokes, notes } from "./evaluate.ts";
+import { median } from "./evalcore.ts";
 import { familyList, loadGoogleFont, validFamilyName } from "./googlefont.ts";
 import { measureFont, measureSlant } from "./measure.ts";
 import { drawPreview } from "./preview.ts";
@@ -160,6 +162,95 @@ function main() {
       layoutAll();
     });
   }).observe(rowsEl);
+
+  attachSheetCheck(rows);
+}
+
+/**
+ * "Check my writing" for the whole sheet: check every line with writing on
+ * it, then summarise. The summary hides itself as soon as any line's check
+ * goes stale.
+ */
+function attachSheetCheck(rows: Row[]) {
+  const button = document.getElementById("check-all");
+  const summary = document.getElementById("sheet-summary");
+  if (!(button instanceof HTMLButtonElement) || !summary) return;
+
+  let shown = false;
+  for (const r of rows) {
+    r.onResult = () => {
+      if (shown && rows.some((x) => x.hasInk && !x.result)) {
+        shown = false;
+        summary.hidden = true;
+      }
+    };
+  }
+
+  button.addEventListener("click", () => {
+    const checked = rows.filter((r) => r.hasInk).map((r) => r.check()).filter((x) => x !== null);
+    summary.replaceChildren();
+    shown = true;
+    summary.hidden = false;
+    const h = document.createElement("h2");
+    h.textContent = "Your sheet";
+    summary.append(h);
+    if (checked.length === 0) {
+      const p = document.createElement("p");
+      p.textContent = "Nothing written yet. Copy a line with the Pencil, then check it.";
+      summary.append(p);
+      return;
+    }
+
+    const overall = Math.round(checked.reduce((a, r) => a + r.score, 0) / checked.length);
+    const p = document.createElement("p");
+    p.textContent = `${overall}% across ${checked.length} line${checked.length === 1 ? "" : "s"}.`;
+    summary.append(p);
+
+    // The letters to work on: the lowest average scores across every line.
+    const byChar = new Map<string, number[]>();
+    for (const r of checked) {
+      for (const l of r.letters) byChar.set(l.char, [...(byChar.get(l.char) ?? []), l.score]);
+    }
+    const weakest = [...byChar].map(([ch, xs]) =>
+      [ch, xs.reduce((a, b) => a + b, 0) / xs.length] as const
+    )
+      .filter(([, avg]) => avg < 85)
+      .sort((a, b) => a[1] - b[1])
+      .slice(0, 3);
+    const tips: string[] = [];
+    if (weakest.length) {
+      tips.push(
+        `Letters to practise: ${
+          weakest.map(([ch, avg]) => `${ch} (${Math.round(avg)}%)`).join(", ")
+        }.`,
+      );
+    }
+    // Tendencies across the sheet, from the lines' measurements.
+    const across = (k: keyof Metrics) =>
+      median(checked.map((r) => r.metrics[k]).filter((x) => Number.isFinite(x)));
+    tips.push(...notes({
+      slantDiff: across("slantDiff"),
+      size: across("size"),
+      width: across("width"),
+      baseline: across("baseline"),
+    }));
+    if (tips.length) {
+      const ul = document.createElement("ul");
+      for (const t of tips) {
+        const li = document.createElement("li");
+        li.textContent = t;
+        ul.append(li);
+      }
+      summary.append(ul);
+    }
+    summary.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
+
+  // For testing in a browser: #debug exposes a way to write a line from the
+  // model's own centreline, so a check can be verified end to end.
+  if (location.hash === "#debug") {
+    (globalThis as Record<string, unknown>).__italic = { rows, modelStrokes };
+  }
 }
 
 main();

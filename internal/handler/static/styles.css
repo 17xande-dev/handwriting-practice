@@ -305,7 +305,8 @@ span.tile-art {
      for the same width. */
   grid-template-areas:
     "ref      ."
-    "practice actions";
+    "practice actions"
+    "result   result";
   gap: var(--gap-xs) var(--gap-sm);
   align-items: start;
 }
@@ -398,7 +399,7 @@ button {
   .toolbar { position: static; }
   .row {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "ref" "practice" "actions";
+    grid-template-areas: "ref" "practice" "actions" "result";
   }
   .row-actions { flex-direction: row; justify-content: flex-end; }
   .slider input[type="range"] { width: 5.5rem; }
@@ -582,4 +583,88 @@ button.primary {
 
   &:empty { display: none; }
   &.error { color: #9b2c2c; }
+}
+
+/* ---- Check my writing ---------------------------------------------------- */
+
+.check-result {
+  grid-area: result;
+  display: grid;
+  gap: var(--gap-xs);
+  padding: var(--gap-sm) var(--gap-md);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fff;
+
+  &[hidden] { display: none; }
+}
+
+.result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-md);
+}
+
+.result-score {
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.result-toggle { min-width: 0; font-size: 0.85rem; }
+
+.result-letters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.letter {
+  display: grid;
+  justify-items: center;
+  min-width: 2.6rem;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+
+  .letter-char { font-family: var(--ref-font); font-size: 1.3rem; line-height: 1.2; color: var(--ink); }
+  .letter-score { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+}
+
+/* Score bands. The same three colours mark the ink on the canvas
+   (deviationColors in web/evaluate.ts). */
+.good { color: #2e8540; }
+.fair { color: #a86d00; }
+.poor, .missing { color: #c0392b; }
+.letter.missing { border-style: dashed; }
+
+.result-notes {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+.check-all {
+  display: grid;
+  justify-items: start;
+  gap: var(--gap-md);
+  margin-block: var(--gap-lg);
+}
+
+.sheet-summary {
+  width: 100%;
+  padding: var(--gap-md);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fff;
+
+  &[hidden] { display: none; }
+
+  h2 { margin: 0 0 var(--gap-xs); font-size: 1.1rem; }
+  p { margin: var(--gap-xs) 0; }
+  ul { margin: var(--gap-xs) 0 0; padding-left: 1.2rem; color: var(--ink-soft); }
 }

@@ -114,6 +114,56 @@ The Content-Security-Policy is built from the catalogue, plus Google Fonts'
 two origins for the picker: `style-src` and `font-src` allow those and
 nothing else. `fonts.Validate` runs at startup.
 
+### Check my writing
+
+Each practice line has a **Check** button, and **Check my writing** at the
+bottom checks every line with writing on it and adds a sheet summary.
+Everything is worked out in the browser (`web/evaluate.ts`, with the pure
+parts in `web/evalcore.ts`); nothing is sent anywhere or saved.
+
+A checked line shows:
+- the model, faint blue, placed under the writing where it was actually
+  written;
+- the writing coloured green where it's on the model, amber near it, red off it;
+- bold red marks on parts of a letter that weren't written at all;
+- a score per letter ("missing" if a letter wasn't written), a score for the
+  line, and up to three notes on slant, x-height, letter width and baseline.
+
+Writing again, Undo, Clear or a change of model clears the check, since it no
+longer describes the line.
+
+**How it works.** The line is analysed at a fixed scale of 40 pixels per
+x-height, whatever its size on screen, and sheared upright by the model's
+slant.
+1. The model text is rendered with the line's font on the shared baseline.
+   Letter boundaries come from the widths of successive prefixes, which keeps
+   kerning and contextual joins.
+2. The user writes on the same guides, so the two already agree vertically.
+   Horizontally, dynamic time warping matches the columns of the model's
+   centreline (its skeleton) to the columns of the user's strokes. Each
+   column is described by the ink in the ascender, x-height and descender
+   zones. This absorbs where the line starts and how widely it is spaced,
+   while keeping letters in order.
+3. Per letter, *precision* is the share of the user's ink within 0.1
+   x-height of the model's ink, and *coverage* is the share of the model's
+   centreline the user's ink reached. The letter score is their average.
+4. Slant is measured from the user's straight downstrokes and compared with
+   the model's own, measured the same way. Size, width and baseline are
+   compared on letters that sit in the x-height band. The line score is the
+   letters' average, less a capped deduction (at most 30%) for those
+   proportions.
+
+**Limits.** It compares shapes, not how they were made: stroke order,
+direction and pen lifts aren't judged, and a model font's letters are a
+stand-in for a teacher's. Tested in Chrome by writing each line from the
+model's own centreline (100%), and from altered copies:
+- shifted right: still 100%;
+- 30% too tall: about 75%, with an x-height note;
+- leaning 8° more: 88%, with a slant note;
+- a letter left out: marked missing.
+
+Open the worksheet with `#debug` to get these helpers in the console.
+
 ### Your own text
 
 "Your own text" on the index takes typed or pasted text and turns each line
@@ -141,6 +191,7 @@ the form isn't empty next time. There is no sharing, by design.
 | Decision | Candidates | What would force it |
 |---|---|---|
 | Sharing a custom exercise | A server-stored exercise behind an unguessable id, perhaps with an owner | Wanting to send an exercise to someone. Putting the text in the URL was rejected (see "Your own text"). |
+| Judging stroke order and direction | Comparing against hand-authored stroke paths per letter | Wanting feedback on how letters are made, not just their shape |
 | Saving practice | IndexedDB on the device; SQLite on the server | Wanting history, or work surviving a reload |
 | Fonts from outside Google | Self-hosted or other font services | Wanting a font Google doesn't have. The picker is Google-only so the CSP stays at two fixed origins. |
 | Stroke-order models | Hand-authored SVG paths per letter | Wanting animated stroke order or direction arrows, which a font can't give |

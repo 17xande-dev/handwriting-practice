@@ -3,6 +3,7 @@
 
 import { type Band, band, toUnits } from "./geometry.ts";
 import { drawGuides, type GuideColors } from "./guides.ts";
+import { check, type CheckResult, colouredRuns, deviationColors, drawOverlay } from "./evaluate.ts";
 import { drawStroke, type Point, type Stroke } from "./ink.ts";
 import { type FontInfo, fontString } from "./measure.ts";
 import { attachPen, type Sample } from "./pen.ts";
@@ -50,9 +51,17 @@ export class Row {
   #base: Surface;
   #undo: HTMLButtonElement;
   #clear: HTMLButtonElement;
+  #check: HTMLButtonElement;
+  #resultEl: HTMLElement;
 
   #band: Band | null = null;
+  #font: FontInfo | null = null;
   #slant = 0;
+  /** The last check, while it still describes what's on the line. */
+  #result: CheckResult | null = null;
+  #showResult = true;
+  /** Called after this row is checked or its check is cleared. */
+  onResult: () => void = () => {};
   #strokes: Stroke[] = [];
   #live: Stroke | null = null;
   #predicted: Point[] = [];
@@ -71,6 +80,9 @@ export class Row {
     this.#base = surface(document.createElement("canvas"));
     this.#undo = el.querySelector('[data-action="undo"]') as HTMLButtonElement;
     this.#clear = el.querySelector('[data-action="clear"]') as HTMLButtonElement;
+    this.#check = el.querySelector('[data-action="check"]') as HTMLButtonElement;
+    this.#resultEl = el.querySelector(".check-result") as HTMLElement;
+    this.#check.addEventListener("click", () => this.check());
 
     this.#undo.addEventListener("click", () => {
       this.#strokes.pop();
@@ -113,6 +125,15 @@ export class Row {
     // The model band sits in the same grid column and is the same width.
     const width = this.#el.querySelector(".practice")!.clientWidth;
     if (width === 0) return;
+    // A different model makes a check meaningless; a new size or width
+    // doesn't, since strokes and results are in x-height units.
+    if (
+      this.#font && (this.#font.family !== font.family || this.#font.style !== font.style ||
+        this.#font.slant !== font.slant)
+    ) {
+      this.#clearResult();
+    }
+    this.#font = font;
     this.#slant = font.slant;
 
     const ctx = this.#ref.ctx;
@@ -149,10 +170,104 @@ export class Row {
     return p;
   }
 
+  /** The line's text, its score if checked, for the sheet summary. */
+  get text(): string {
+    return this.#text;
+  }
+  get result(): CheckResult | null {
+    return this.#result;
+  }
+  get hasInk(): boolean {
+    return this.#strokes.length > 0;
+  }
+
+  /** For browser tests only (#debug): replace the line's writing. */
+  debugWrite(make: (text: string, font: FontInfo) => Stroke[]) {
+    if (!this.#font) return;
+    this.#strokes = make(this.#text, this.#font);
+    this.#changed();
+  }
+
+  /** Compare what's written with the model, and show where it strays. */
+  check(): CheckResult | null {
+    if (!this.#font || this.#strokes.length === 0) return null;
+    this.#result = check(this.#text, this.#font, this.#strokes);
+    this.#showResult = true;
+    this.#renderResult();
+    this.#rebuildBase();
+    this.#draw();
+    this.onResult();
+    return this.#result;
+  }
+
+  #clearResult() {
+    if (!this.#result) return;
+    this.#result = null;
+    this.#renderResult();
+    this.onResult();
+  }
+
+  /** The strip under the line: a chip per letter, the score, and notes. */
+  #renderResult() {
+    const r = this.#result;
+    const el = this.#resultEl;
+    this.#check.textContent = r ? "Check again" : "Check";
+    el.replaceChildren();
+    el.hidden = !r;
+    if (!r) return;
+
+    const head = document.createElement("div");
+    head.className = "result-head";
+    const score = document.createElement("strong");
+    score.className = `result-score ${scoreClass(r.score)}`;
+    score.textContent = `${r.score}%`;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "result-toggle";
+    toggle.textContent = this.#showResult ? "Hide results" : "Show results";
+    toggle.addEventListener("click", () => {
+      this.#showResult = !this.#showResult;
+      toggle.textContent = this.#showResult ? "Hide results" : "Show results";
+      this.#rebuildBase();
+      this.#draw();
+    });
+    head.append(score, toggle);
+
+    const letters = document.createElement("ol");
+    letters.className = "result-letters";
+    for (const l of r.letters) {
+      const li = document.createElement("li");
+      li.className = `letter ${l.missing ? "missing" : scoreClass(l.score)}`;
+      const ch = document.createElement("span");
+      ch.className = "letter-char";
+      ch.textContent = l.char;
+      const sc = document.createElement("span");
+      sc.className = "letter-score";
+      sc.textContent = l.missing ? "missing" : `${l.score}`;
+      li.append(ch, sc);
+      letters.append(li);
+    }
+
+    el.append(head, letters);
+    if (r.notes.length) {
+      const notes = document.createElement("ul");
+      notes.className = "result-notes";
+      for (const n of r.notes) {
+        const li = document.createElement("li");
+        li.textContent = n;
+        notes.append(li);
+      }
+      el.append(notes);
+    }
+  }
+
   #changed() {
     const n = this.#strokes.length;
     this.#undo.disabled = n === 0;
     this.#clear.disabled = n === 0;
+    this.#check.disabled = n === 0;
+    // Anything written, undone or cleared makes the last check stale.
+    this.#clearResult();
     // Exposed for tests and the browser console; not used by the app itself.
     this.#practice.canvas.dataset.strokes = String(n);
     this.#rebuildBase();
@@ -165,7 +280,19 @@ export class Row {
     const ctx = this.#base.ctx;
     ctx.clearRect(0, 0, b.width, b.height);
     drawGuides(ctx, b, this.#theme.guides, this.#slant);
-    for (const s of this.#strokes) drawStroke(ctx, b, s, this.#theme.penInk);
+    const r = this.#showResult ? this.#result : null;
+    if (!r) {
+      for (const s of this.#strokes) drawStroke(ctx, b, s, this.#theme.penInk);
+      return;
+    }
+    // Results view: the model as a ghost under the writing, then the
+    // writing coloured by how far each part is from the model.
+    drawOverlay(ctx, b, r);
+    this.#strokes.forEach((s, i) => {
+      for (const run of colouredRuns(s, r.pointClass[i])) {
+        drawStroke(ctx, b, run.stroke, deviationColors[run.cls]);
+      }
+    });
   }
 
   #schedule() {
@@ -196,4 +323,9 @@ export class Row {
       drawStroke(ctx, b, shown, this.#theme.penInk);
     }
   }
+}
+
+/** A score's colour band, as a class name. */
+function scoreClass(score: number): string {
+  return score >= 85 ? "good" : score >= 65 ? "fair" : "poor";
 }
