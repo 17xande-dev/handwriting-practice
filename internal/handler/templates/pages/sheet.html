@@ -2,17 +2,6 @@
 <form class="toolbar" id="toolbar" aria-label="Pen and paper settings">
   <div class="inner toolbar-inner">
     <fieldset class="tiles">
-      <legend>Model</legend>
-      {{- range $i, $f := .Fonts}}
-      <label class="tile">
-        <input type="radio" name="model" value="{{.ID}}" data-slant="{{.Slant}}"{{if eq $i 0}} checked{{end}}>
-        <span class="tile-art font-{{.ID}}" aria-hidden="true">an</span>
-        <span class="tile-label">{{.Label}}</span>
-      </label>
-      {{- end}}
-    </fieldset>
-
-    <fieldset class="tiles">
       <legend>Pen</legend>
       <label class="tile">
         <input type="radio" name="pen" value="monoline" checked>
@@ -80,6 +69,41 @@
 
   </div>
 </form>
+
+<!-- The model font is chosen here rather than in the sticky toolbar: there
+     are too many to fit there, and it is rarely changed mid-line. The inputs
+     belong to the toolbar form through form="toolbar". -->
+<section class="models inner" aria-labelledby="models-heading">
+  <h2 id="models-heading">Model</h2>
+  <div class="model-tiles" role="radiogroup" aria-labelledby="models-heading">
+    {{- range $i, $f := .Fonts}}
+    <label class="tile">
+      <input type="radio" form="toolbar" name="model" value="{{.ID}}" data-slant="{{.Slant}}"{{if .Italic}} data-style="italic"{{end}}{{if eq $i 0}} checked{{end}}>
+      <span class="tile-art font-{{.ID}}" aria-hidden="true">an</span>
+      <span class="tile-label">{{.Label}}</span>
+    </label>
+    {{- end}}
+    <label class="tile">
+      <input type="radio" form="toolbar" name="model" value="custom">
+      <span class="tile-art custom-art" id="custom-art" aria-hidden="true">Aa</span>
+      <span class="tile-label">Any Google font</span>
+    </label>
+  </div>
+  <div class="custom-font" data-model="custom" hidden>
+    <label class="field">Google Fonts family
+      <input type="text" form="toolbar" name="customFont" id="custom-font" maxlength="64"
+        autocomplete="off" autocapitalize="words" autocorrect="off" spellcheck="false"
+        placeholder="e.g. Caveat">
+    </label>
+    <button type="button" id="custom-font-load">Load</button>
+    <label class="slider">
+      <span class="slider-name">Slant</span>
+      <input type="range" form="toolbar" name="customSlant" min="-20" max="30" step="0.5" value="0">
+      <output id="custom-slant-out">0°</output>
+    </label>
+    <p class="custom-status" id="custom-font-status" role="status"></p>
+  </div>
+</section>
 
 <div class="inner writing-area" id="writing-area">
   <h1>{{.Sheet.Title}}</h1>

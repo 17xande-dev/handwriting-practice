@@ -51,12 +51,13 @@ func TestValidateRejectsUnsafeFonts(t *testing.T) {
 }
 
 func TestCSS(t *testing.T) {
-	css := string(CSS([]Font{{ID: "a", Family: "Font A"}, {ID: "b", Family: "Font B"}}))
+	css := string(CSS([]Font{{ID: "a", Family: "Font A"}, {ID: "b", Family: "Font B", Italic: true}}))
 	for _, want := range []string{
 		`--font-a: "Font A", cursive;`,
 		`--font-b: "Font B", cursive;`,
 		`--ref-font: var(--font-a);`,
-		`.font-b { font-family: var(--font-b); }`,
+		`.font-a { font-family: var(--font-a); font-style: normal; }`,
+		`.font-b { font-family: var(--font-b); font-style: italic; }`,
 	} {
 		if !strings.Contains(css, want) {
 			t.Errorf("missing %q in:\n%s", want, css)

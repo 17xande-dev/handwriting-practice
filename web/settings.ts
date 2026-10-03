@@ -9,10 +9,14 @@ export interface Settings {
   pen: Pen;
   /** x-height in CSS pixels. */
   xh: number;
-  /** Model font id from the catalogue. */
+  /** Model font id from the catalogue, or "custom" for a Google font by name. */
   model: string;
+  /** CSS font-style of the model: "normal" or "italic". */
+  style: string;
   /** Slope of the model font, degrees right of vertical. */
   slant: number;
+  /** The Google Fonts family typed in for the "custom" model. */
+  customFont: string;
   touchWrites: boolean;
 }
 
@@ -30,14 +34,39 @@ export class Toolbar {
     this.#last = this.read();
     // The form never submits: Enter in a field would otherwise reload the page.
     form.addEventListener("submit", (e) => e.preventDefault());
-    form.addEventListener("input", () => {
-      this.#sync();
-      this.#save();
-      const now = this.read();
-      const before = this.#last;
-      this.#last = now;
-      for (const fn of this.#listeners) fn(now, before);
+    // Some controls (the model picker) sit outside the form and join it with
+    // form="toolbar"; their events don't bubble through the form, so listen
+    // on the document and keep those that belong to it.
+    document.addEventListener("input", (e) => {
+      const t = e.target as HTMLInputElement | null;
+      if (t?.form === form) this.changed();
     });
+  }
+
+  /** Re-read the settings and tell listeners; also used after a script sets a value. */
+  changed() {
+    this.#sync();
+    this.#save();
+    const now = this.read();
+    const before = this.#last;
+    this.#last = now;
+    for (const fn of this.#listeners) fn(now, before);
+  }
+
+  /** Set a control's value from script (which fires no input event) and notify. */
+  set(name: string, value: string) {
+    const el = this.#form.elements.namedItem(name);
+    if (el instanceof HTMLInputElement) {
+      el.value = value;
+      this.changed();
+    }
+  }
+
+  /** Every input belonging to the form, including those outside it. */
+  #inputs(): HTMLInputElement[] {
+    return [...this.#form.elements].filter((e): e is HTMLInputElement =>
+      e instanceof HTMLInputElement && e.name !== ""
+    );
   }
 
   onChange(fn: (now: Settings, before: Settings) => void) {
@@ -54,13 +83,16 @@ export class Toolbar {
     const pen: Pen = f.get("pen") === "edged"
       ? { kind: "edged", nibs: num("nibs", 5), angle: num("angle", 45) }
       : { kind: "monoline", weight: num("weight", 3) };
-    const model = this.#form.querySelector<HTMLInputElement>('input[name="model"]:checked') ??
-      this.#form.querySelector<HTMLInputElement>('input[name="model"]');
+    const models = this.#inputs().filter((e) => e.name === "model");
+    const model = models.find((e) => e.checked) ?? models[0];
+    const custom = model?.value === "custom";
     return {
       pen,
       xh: num("xh", 32),
       model: model?.value ?? "",
-      slant: Number(model?.dataset.slant ?? 0) || 0,
+      style: model?.dataset.style ?? "normal",
+      slant: custom ? num("customSlant", 0) : Number(model?.dataset.slant ?? 0) || 0,
+      customFont: String(f.get("customFont") ?? "").trim(),
       touchWrites: f.get("finger") === "on",
     };
   }
@@ -70,6 +102,13 @@ export class Toolbar {
     const s = this.read();
     for (const el of this.#form.querySelectorAll<HTMLElement>("[data-pen]")) {
       el.hidden = el.dataset.pen !== s.pen.kind;
+    }
+    for (const el of document.querySelectorAll<HTMLElement>("[data-model]")) {
+      el.hidden = el.dataset.model !== s.model;
+    }
+    const slantOut = document.getElementById("custom-slant-out");
+    if (slantOut instanceof HTMLOutputElement && s.model === "custom") {
+      slantOut.value = `${s.slant}°`;
     }
     const out = (name: string, text: string) => {
       const o = this.#form.elements.namedItem(name);
@@ -106,7 +145,7 @@ export class Toolbar {
     // Radios are only changed if the stored value still exists, so a font
     // dropped from the catalogue leaves the default selected, not nothing.
     const radios = new Map<string, HTMLInputElement[]>();
-    for (const el of this.#form.querySelectorAll<HTMLInputElement>("input[name]")) {
+    for (const el of this.#inputs()) {
       const v = stored[el.name];
       if (el.type === "radio") radios.set(el.name, [...(radios.get(el.name) ?? []), el]);
       else if (el.type === "checkbox") el.checked = v === "on";

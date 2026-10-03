@@ -105,17 +105,18 @@ func TestCSPAllowsConfiguredFontOrigins(t *testing.T) {
 	}
 }
 
-// With no remote stylesheet the page must not link one, and the CSP must not
-// keep allowing a host nothing uses.
-func TestLocalFontNeedsNoRemoteOrigins(t *testing.T) {
+// A catalogue with no remote fonts must not link a stylesheet, and the CSP
+// must allow Google Fonts (for the picker) and nothing else remote.
+func TestLocalCatalogueAllowsOnlyGoogle(t *testing.T) {
 	h := newTestServer(t, []fonts.Font{{ID: "local", Label: "Local", Family: "Local Font"}})
 	res, body := get(t, h, "/sheet/arches")
 	if strings.Contains(body, "googleapis") {
-		t.Error("page still links a remote font stylesheet")
+		t.Error("page links a remote font stylesheet")
 	}
 	csp := res.Header.Get("Content-Security-Policy")
-	if !strings.Contains(csp, "style-src 'self';") || !strings.Contains(csp, "font-src 'self';") {
-		t.Errorf("CSP still allows remote font origins:\n%s", csp)
+	if !strings.Contains(csp, "style-src 'self' https://fonts.googleapis.com;") ||
+		!strings.Contains(csp, "font-src 'self' https://fonts.gstatic.com;") {
+		t.Errorf("CSP font origins wrong:\n%s", csp)
 	}
 }
 
@@ -132,8 +133,27 @@ func TestSheetOffersEveryModelFont(t *testing.T) {
 		if checked := strings.Contains(body, want+" checked"); checked != (i == 0) {
 			t.Errorf("%s: checked = %v; only the first font should be the default", f.ID, checked)
 		}
+		if f.Italic && !strings.Contains(body, want+` data-style="italic"`) {
+			t.Errorf("%s: italic font not marked italic for the script", f.ID)
+		}
 		if !strings.Contains(html.UnescapeString(body), `href="`+f.CSSURL+`"`) {
 			t.Errorf("stylesheet for %s not linked", f.ID)
+		}
+	}
+}
+
+// The "any Google font" picker is offered on every worksheet, and its inputs
+// belong to the toolbar form so they're read and remembered with the rest.
+func TestSheetOffersAnyGoogleFont(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	_, body := get(t, h, "/sheet/arches")
+	for _, want := range []string{
+		`form="toolbar" name="model" value="custom"`,
+		`form="toolbar" name="customFont"`,
+		`form="toolbar" name="customSlant"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s", want)
 		}
 	}
 }

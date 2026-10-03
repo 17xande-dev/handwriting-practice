@@ -29,10 +29,20 @@ type Font struct {
 	// be derived from CSSURL: Google serves the CSS from fonts.googleapis.com
 	// and the files from fonts.gstatic.com.
 	FileOrigin string
+	// Italic selects the font's italic style rather than its upright one.
+	Italic bool
 	// Slant is the writing slope in degrees right of vertical. The guides
 	// draw their slant lines at this angle; 0 means upright paper.
 	Slant float64
 }
+
+// Google Fonts serves stylesheets from one origin and font files from
+// another. The CSP always allows both, because the worksheet's "any Google
+// font" picker loads a family by name in the browser.
+const (
+	GoogleCSSOrigin  = "https://fonts.googleapis.com"
+	GoogleFileOrigin = "https://fonts.gstatic.com"
+)
 
 // Builtin is the catalogue, default first. The choices are recorded in the README.
 var Builtin = []Font{
@@ -51,6 +61,43 @@ var Builtin = []Font{
 		CSSURL:     "https://fonts.googleapis.com/css2?family=Playwrite+US+Modern&display=swap",
 		FileOrigin: "https://fonts.gstatic.com",
 		Slant:      0,
+	},
+	// Playwrite England: the GB S (semi-joined) and GB J (joined) school
+	// hands, each upright and italic. The italic slants were measured from
+	// the fonts' own "l" stems, at about 7°.
+	{
+		ID:         "gb-s",
+		Label:      "England semi-joined",
+		Family:     "Playwrite GB S",
+		CSSURL:     "https://fonts.googleapis.com/css2?family=Playwrite+GB+S&display=swap",
+		FileOrigin: "https://fonts.gstatic.com",
+		Slant:      0,
+	},
+	{
+		ID:         "gb-s-italic",
+		Label:      "England semi-joined italic",
+		Family:     "Playwrite GB S",
+		CSSURL:     "https://fonts.googleapis.com/css2?family=Playwrite+GB+S:ital@1&display=swap",
+		FileOrigin: "https://fonts.gstatic.com",
+		Italic:     true,
+		Slant:      7,
+	},
+	{
+		ID:         "gb-j",
+		Label:      "England joined",
+		Family:     "Playwrite GB J",
+		CSSURL:     "https://fonts.googleapis.com/css2?family=Playwrite+GB+J&display=swap",
+		FileOrigin: "https://fonts.gstatic.com",
+		Slant:      0,
+	},
+	{
+		ID:         "gb-j-italic",
+		Label:      "England joined italic",
+		Family:     "Playwrite GB J",
+		CSSURL:     "https://fonts.googleapis.com/css2?family=Playwrite+GB+J:ital@1&display=swap",
+		FileOrigin: "https://fonts.gstatic.com",
+		Italic:     true,
+		Slant:      7,
 	},
 }
 
@@ -104,7 +151,11 @@ func CSS(list []Font) []byte {
 	// --ref-font is the default font, used wherever there's no picker.
 	b = fmt.Appendf(b, "  --ref-font: var(--font-%s);\n}\n", list[0].ID)
 	for _, f := range list {
-		b = fmt.Appendf(b, ".font-%s { font-family: var(--font-%s); }\n", f.ID, f.ID)
+		style := "normal"
+		if f.Italic {
+			style = "italic"
+		}
+		b = fmt.Appendf(b, ".font-%s { font-family: var(--font-%s); font-style: %s; }\n", f.ID, f.ID, style)
 	}
 	return b
 }

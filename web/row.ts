@@ -1,9 +1,10 @@
 // One worksheet row: the model drawn on guides, and the practice line beneath
 // it where the strokes are written.
 
-import { type Band, band, type Proportions, toUnits } from "./geometry.ts";
+import { type Band, band, toUnits } from "./geometry.ts";
 import { drawGuides, type GuideColors } from "./guides.ts";
 import { drawStroke, type Point, type Stroke } from "./ink.ts";
+import { type FontInfo, fontString } from "./measure.ts";
 import { attachPen, type Sample } from "./pen.ts";
 import type { Settings } from "./settings.ts";
 
@@ -11,17 +12,6 @@ export interface Theme {
   guides: GuideColors;
   modelInk: string;
   penInk: string;
-}
-
-/** What the reference font looks like, measured once it has loaded. */
-export interface FontInfo {
-  /** A CSS font-family list, e.g. `"Edu SA Beginner", cursive`. */
-  family: string;
-  /** x-height as a fraction of the font size. */
-  xRatio: number;
-  proportions: Proportions;
-  /** Slope in degrees right of vertical, for the slant guides. */
-  slant: number;
 }
 
 interface Surface {
@@ -126,7 +116,7 @@ export class Row {
     this.#slant = font.slant;
 
     const ctx = this.#ref.ctx;
-    ctx.font = `${xh / font.xRatio}px ${font.family}`;
+    ctx.font = fontString(font, xh / font.xRatio);
     const textWidth = ctx.measureText(this.#text).width;
     const trial = band(xh, width, font.proportions);
     const room = width - 2 * trial.left;
@@ -142,7 +132,7 @@ export class Row {
     resize(this.#base, b);
 
     drawGuides(this.#ref.ctx, b, this.#theme.guides, this.#slant);
-    this.#ref.ctx.font = `${fitted / font.xRatio}px ${font.family}`;
+    this.#ref.ctx.font = fontString(font, fitted / font.xRatio);
     this.#ref.ctx.fillStyle = this.#theme.modelInk;
     this.#ref.ctx.textBaseline = "alphabetic";
     this.#ref.ctx.fillText(this.#text, b.left, b.baseline);

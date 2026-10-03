@@ -1,10 +1,11 @@
 // Entry point: wires the toolbar to the pen preview and every row on a
 // worksheet page.
 
-import { defaultProportions } from "./geometry.ts";
+import { familyList, loadGoogleFont, validFamilyName } from "./googlefont.ts";
+import { measureFont, measureSlant } from "./measure.ts";
 import { drawPreview } from "./preview.ts";
 import { attachWritingArea } from "./pen.ts";
-import { type FontInfo, Row, type Theme } from "./row.ts";
+import { Row, type Theme } from "./row.ts";
 import { type Settings, Toolbar } from "./settings.ts";
 
 function cssVar(name: string, fallback: string): string {
@@ -12,34 +13,9 @@ function cssVar(name: string, fallback: string): string {
 }
 
 /**
- * Measure a model font's proportions from its own glyphs, so the guides fit
- * whichever font is chosen rather than assuming one.
- */
-function measureFont(family: string, slant: number): FontInfo {
-  const ctx = document.createElement("canvas").getContext("2d")!;
-  const size = 100;
-  ctx.font = `${size}px ${family}`;
-  const ascent = (ch: string) => ctx.measureText(ch).actualBoundingBoxAscent;
-  const x = ascent("x");
-  if (!(x > 0)) return { family, xRatio: 0.5, proportions: defaultProportions, slant };
-  // Rounded so that guides don't shift by a hair between fonts that are
-  // meant to share proportions.
-  const round = (n: number) => Math.min(1.6, Math.max(0.5, Math.round(n * 20) / 20));
-  return {
-    family,
-    xRatio: x / size,
-    proportions: {
-      asc: round((ascent("l") - x) / x),
-      desc: round(ctx.measureText("p").actualBoundingBoxDescent / x),
-    },
-    slant,
-  };
-}
-
-/**
  * Remember the last custom text on this device, so coming back to the form
- * doesn't mean pasting it again. Prefill only an empty box: text arriving in
- * the URL (from "Edit this text") wins.
+ * doesn't mean pasting it again. Prefill only an empty box: text posted back
+ * by "Edit this text" wins.
  */
 function rememberCustomText() {
   const box = document.getElementById("custom-text");
@@ -89,11 +65,16 @@ function main() {
     }
   };
 
-  // The family for a model comes from the generated font.css (--font-<id>).
-  const family = (s: Settings) => cssVar(`--font-${s.model}`, cssVar("--ref-font", "serif"));
+  // A catalogue font's family comes from the generated font.css
+  // (--font-<id>); a custom one is whatever Google font has been loaded.
+  let customLoaded = "";
+  const family = (s: Settings) =>
+    s.model === "custom"
+      ? (customLoaded ? familyList(customLoaded) : "cursive")
+      : cssVar(`--font-${s.model}`, cssVar("--ref-font", "serif"));
   const layoutAll = () => {
     const s = toolbar.read();
-    const font = measureFont(family(s), s.slant);
+    const font = measureFont(family(s), s.style, s.slant);
     for (const r of rows) r.layout(s.xh, font);
   };
 
@@ -103,17 +84,69 @@ function main() {
   const loadAndLayout = () => {
     layoutAll();
     const s = toolbar.read();
-    document.fonts.load(`32px ${family(s)}`).then(() => {
+    document.fonts.load(`${s.style} 32px ${family(s)}`).then(() => {
       if (toolbar.read().model === s.model) layoutAll();
     }).catch(() => {});
   };
+
+  // "Any Google font": load the named family, measure its slope for the
+  // paper, and show it on its tile.
+  const status = document.getElementById("custom-font-status");
+  const art = document.getElementById("custom-art");
+  const say = (text: string, error = false) => {
+    if (!status) return;
+    status.textContent = text;
+    status.classList.toggle("error", error);
+  };
+  let loading = 0;
+  const loadCustom = async (measure: boolean) => {
+    const name = toolbar.read().customFont.replace(/\s+/g, " ");
+    if (!name) {
+      say("Type a family name from fonts.google.com, then Load.");
+      return;
+    }
+    const ticket = ++loading;
+    say(`Loading “${name}”…`);
+    try {
+      await loadGoogleFont(name);
+    } catch (e) {
+      if (ticket === loading) say((e as Error).message, true);
+      return;
+    }
+    if (ticket !== loading) return; // a newer load superseded this one
+    customLoaded = name;
+    if (art) art.style.fontFamily = familyList(name);
+    if (measure) {
+      const slant = measureSlant(familyList(name), "normal");
+      toolbar.set("customSlant", String(slant.degrees)); // notifies, which relays out
+      say(
+        slant.reliable
+          ? `Loaded “${name}”. Its letters slope ${slant.degrees}°; adjust the slant if the paper doesn't match.`
+          : `Loaded “${name}”. Its slope couldn't be measured (looped or decorative letters), so set the slant by eye.`,
+      );
+    } else {
+      say(`Loaded “${name}”.`);
+    }
+    if (toolbar.read().model === "custom") layoutAll();
+  };
+  document.getElementById("custom-font-load")?.addEventListener("click", () => loadCustom(true));
+  // Enter in the name field loads it too (the form itself never submits).
+  document.getElementById("custom-font")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      loadCustom(true);
+    }
+  });
+  // A font chosen on an earlier visit comes back with its saved slant.
+  if (validFamilyName(toolbar.read().customFont)) loadCustom(false);
+
   loadAndLayout();
   redrawPreview(toolbar.read());
 
   toolbar.onChange((now, before) => {
     redrawPreview(now);
-    if (now.model !== before.model) loadAndLayout();
-    else if (now.xh !== before.xh) layoutAll();
+    if (now.model !== before.model || now.style !== before.style) loadAndLayout();
+    else if (now.xh !== before.xh || now.slant !== before.slant) layoutAll();
   });
 
   // Rotation and split view change the width; redraw at the new size.

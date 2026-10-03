@@ -70,25 +70,43 @@ and size are all sliders.
 
 ### Model fonts
 
-Worksheets can show their models in either font from the catalogue in
-`internal/fonts`. The models are drawn on a canvas, and the guides are placed
-from the chosen font's measured proportions (the heights of "x" and "l", the
-depth of "p"), so any font sits correctly on them. Each font also sets the
-paper's slant lines:
+The model is chosen from the strip above the worksheet title (it doesn't fit
+in the sticky toolbar, and rarely changes mid-line). The models are drawn on
+a canvas, and the guides are placed from the chosen font's measured
+proportions (the heights of "x" and "l", the depth of "p"), so any font sits
+correctly on them. Each model also sets the paper's slant lines.
+
+The catalogue, in `internal/fonts`:
 
 | Model | Font | Slant | Why |
 |---|---|---|---|
-| Italic (default) | Edu SA Beginner | 5° | A South Australian school hand derived from italic. Of the open-licensed school fonts compared, it was closest to Getty-Dubay basic italic: elliptical bowls, branching arches, exit strokes and a gentle slope. Its f stays on the baseline, whereas Getty-Dubay's descends. |
-| Upright | Playwrite US Modern | 0° | An upright school hand from the same Playwrite family. Edu QLD and Playwrite NZ still slope, and Andika is a print face rather than handwriting. |
+| Italic (default) | Edu SA Beginner | 5° | A South Australian school hand derived from italic. Of the open-licensed school fonts compared, it was closest to Getty-Dubay basic italic: elliptical bowls, branching arches, exit strokes and a gentle slope. Its f stays on the baseline, whereas Getty-Dubay's descends. It measures 6°; 5° is Getty-Dubay's slope. |
+| Upright | Playwrite US Modern | 0° | An upright school hand. Edu QLD and Playwrite NZ still slope, and Andika is a print face rather than handwriting. |
+| England semi-joined (+ italic) | Playwrite GB S | 0° / 7° | Playwrite England, semi-joined, upright and italic. |
+| England joined (+ italic) | Playwrite GB J | 0° / 7° | Playwrite England, joined, upright and italic. The joins show within words. |
 
-Both fonts are SIL OFL and served by Google Fonts; the official Getty-Dubay
-fonts are commercial. `ADDR` (default `:8080`) is the only environment
-variable.
+All are SIL OFL from Google Fonts; the official Getty-Dubay fonts are
+commercial. The Playwrite GB "Guides" variants, which draw their own ruling,
+are left out because the app rules the paper itself.
 
-The Content-Security-Policy is built from the catalogue: `style-src` and
-`font-src` allow exactly the origins the fonts use, and nothing else.
-`fonts.Validate` runs at startup and is the gate user-supplied fonts will
-have to pass.
+**Any Google font.** The last tile takes a Google Fonts family name and loads
+it in the browser (`web/googlefont.ts`). The name is checked against Google's
+naming (letters, digits, spaces, hyphens) and only ever becomes a query
+parameter on a fixed `fonts.googleapis.com` URL, so a typed name can't send
+the page anywhere else. It is never sent to this server. An unknown name is
+reported, and doesn't replace the font already loaded. The slant is measured
+from the font itself (`measureSlant` in `web/measure.ts`): the ascender stems
+of l, h, k, b and d, where each pixel row is a single stroke, fitted to a line
+and taken as the median. It's flagged as unmeasurable when the letters
+disagree, as with looped scripts; then the slider (−20° to 30°, since some
+hands lean back) sets it by eye. The chosen font and slant are remembered on
+the device.
+
+`ADDR` (default `:8080`) is the only environment variable.
+
+The Content-Security-Policy is built from the catalogue, plus Google Fonts'
+two origins for the picker: `style-src` and `font-src` allow those and
+nothing else. `fonts.Validate` runs at startup.
 
 ### Your own text
 
@@ -118,7 +136,7 @@ the form isn't empty next time. There is no sharing, by design.
 |---|---|---|
 | Sharing a custom exercise | A server-stored exercise behind an unguessable id, perhaps with an owner | Wanting to send an exercise to someone. Putting the text in the URL was rejected (see "Your own text"). |
 | Saving practice | IndexedDB on the device; SQLite on the server | Wanting history, or work surviving a reload |
-| User-chosen fonts | A per-user entry in the catalogue | That feature. The CSP is built per catalogue, so user-supplied origins need checking against an allow-list (for example, Google Fonts only), not trusting. |
+| Fonts from outside Google | Self-hosted or other font services | Wanting a font Google doesn't have. The picker is Google-only so the CSP stays at two fixed origins. |
 | Stroke-order models | Hand-authored SVG paths per letter | Wanting animated stroke order or direction arrows, which a font can't give |
 | Getty-Dubay proportions | Fixed guide ratios instead of the font's measured ones | A model font whose proportions stray from the hand |
 | htmx / Web Awesome | Add when a server round-trip or a complex control needs them | Saving or account features. v1 has neither. |

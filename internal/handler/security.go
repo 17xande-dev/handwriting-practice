@@ -9,8 +9,8 @@ import (
 )
 
 // Policy is the Content-Security-Policy, built from the font catalogue so a
-// font cannot be added without its origins being allowed too, and no origin
-// is allowed that no font uses.
+// font cannot be added without its origins being allowed too. Beyond the
+// catalogue, only Google Fonts is allowed, for the picker.
 type Policy struct {
 	StyleSrc []string
 	FontSrc  []string
@@ -28,6 +28,9 @@ func newPolicy(list []fonts.Font) Policy {
 			*dst = append(*dst, o)
 		}
 	}
+	// The "any Google font" picker needs Google whatever the catalogue holds.
+	add(&p.StyleSrc, fonts.GoogleCSSOrigin)
+	add(&p.FontSrc, fonts.GoogleFileOrigin)
 	for _, f := range list {
 		add(&p.StyleSrc, f.CSSURL)
 		add(&p.FontSrc, f.FileOrigin)

@@ -10,7 +10,8 @@ export interface GuideColors {
 
 /**
  * Draw the four rules and the slant lines. `slant` is degrees right of
- * vertical: about 5° for Getty-Dubay italic, 0° for upright paper.
+ * vertical: about 5° for Getty-Dubay italic, 0° for upright paper, negative
+ * for a hand that leans backwards.
  */
 export function drawGuides(ctx: CanvasRenderingContext2D, b: Band, c: GuideColors, slant: number) {
   ctx.save();
@@ -33,7 +34,11 @@ export function drawGuides(ctx: CanvasRenderingContext2D, b: Band, c: GuideColor
   ctx.lineWidth = 1;
   const rise = b.descender - b.ascender;
   const run = Math.tan((slant * Math.PI) / 180) * rise;
-  for (let x = b.left; x < b.width + Math.max(0, run); x += b.xh * 1.5) {
+  const step = b.xh * 1.5;
+  // A backward slant (negative run) leans the other way, so start far enough
+  // left that the bottom-left corner of the paper is still ruled.
+  const first = run < 0 ? b.left - Math.ceil(-run / step) * step : b.left;
+  for (let x = first; x < b.width + Math.max(0, run); x += step) {
     ctx.moveTo(x - run, b.descender);
     ctx.lineTo(x, b.ascender);
   }
