@@ -8,11 +8,11 @@ each one to copy onto.
 ## Running it
 
 ```sh
-make run                      # http://localhost:8080
-make run ADDR=0.0.0.0:8080    # reachable from an iPad on the same network
+make run                      # http://localhost:8083
+make run ADDR=0.0.0.0:8083    # reachable from an iPad on the same network
 ```
 
-Then open `http://<this machine's LAN IP>:8080` in Safari on the iPad. Pointer
+Then open `http://<this machine's LAN IP>:8083` in Safari on the iPad. Pointer
 Events need no secure context, so plain HTTP on the LAN is fine.
 
 `make check` is the gate before a commit: gofmt, `deno fmt`/`lint`/`check`,
@@ -155,7 +155,7 @@ disagree, as with looped scripts; then the slider (−20° to 30°, since some
 hands lean back) sets it by eye. The chosen font and slant are remembered on
 the device.
 
-`ADDR` (default `:8080`) is the only environment variable.
+`ADDR` (default `:8083` with `make run`; the container uses `:8080`, published on 8083) is the only environment variable.
 
 The Content-Security-Policy is built from the catalogue, plus Google Fonts'
 two origins for the picker: `style-src` and `font-src` allow those and

@@ -1,8 +1,8 @@
 .PHONY: run bundle build test vet fmt check up down fonts-fetch
 
-ADDR ?= :8080
+ADDR ?= :8083
 
-## run: bundle the TypeScript and run the server on the host (ADDR=0.0.0.0:8080 to reach it from an iPad)
+## run: bundle the TypeScript and run the server on the host (ADDR=0.0.0.0:8083 to reach it from an iPad)
 run: bundle
 	ADDR=$(ADDR) go run .
 
