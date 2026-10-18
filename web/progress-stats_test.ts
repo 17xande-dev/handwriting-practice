@@ -16,6 +16,8 @@ const noon = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).getT
 
 function rec(at: number, score: number, sheet = "arches", letters = "nm"): CheckRecord {
   return {
+    id: `c${at}`,
+    ts: at,
     at,
     sheet,
     sheetTitle: sheet === "custom" ? "Your text" : "Branching arches",

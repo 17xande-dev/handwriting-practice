@@ -28,7 +28,16 @@ import {
   since,
   trendPerWeek,
 } from "./progress-stats.ts";
-import { type Backup, type CheckRecord, DeviceStore, isRecord } from "./progress-store.ts";
+import {
+  type Backup,
+  BACKUP_VERSION,
+  type CheckRecord,
+  DeviceStore,
+  isRecord,
+  type SyncState,
+} from "./progress-store.ts";
+import { ago, checkSignedIn, type SyncResult } from "./sync.ts";
+import { installSync, type Syncer } from "./sync-triggers.ts";
 
 Chart.register(
   BarController,
@@ -126,10 +135,12 @@ function main() {
   };
 
   root.querySelector(".range")?.addEventListener("change", render);
-  attachHistoryTools(store, async () => {
+  const reload = async () => {
     all = await store.all();
     render();
-  });
+  };
+  const syncer = attachSync(store, reload);
+  attachHistoryTools(store, reload, syncer);
 
   store.all().then((rs) => {
     all = rs;
@@ -388,12 +399,129 @@ function say(text: string, error = false) {
   s.classList.toggle("error", error);
 }
 
-function attachHistoryTools(store: DeviceStore, reload: () => Promise<void>) {
+/**
+ * The Sync card. Signing in happens on /account; this only asks /api/me
+ * whether the browser's session is good, and the first time it sees one it
+ * turns sync on (offering to upload what is already here).
+ */
+function attachSync(store: DeviceStore, reload: () => Promise<void>): Syncer {
+  const el = (id: string) => document.getElementById(id)!;
+  const ui = {
+    out: el("sync-out"),
+    in: el("sync-in"),
+    line: el("sync-line"),
+    now: el("sync-now") as HTMLButtonElement,
+    offer: el("sync-offer"),
+    offerText: el("sync-offer-text"),
+    yes: el("sync-offer-yes") as HTMLButtonElement,
+    no: el("sync-offer-no") as HTMLButtonElement,
+    status: el("sync-status"),
+  };
+  let state: SyncState | null = null;
+  let known = false; // /api/me has answered (or failed) once
+  let offering = false;
+  let syncing = false;
+  let last: SyncResult | null = null;
+
+  const render = () => {
+    ui.out.hidden = !known || state !== null || offering;
+    ui.in.hidden = state === null || offering;
+    ui.offer.hidden = !offering;
+    ui.now.disabled = syncing;
+    if (!state) return;
+    const r = last;
+    ui.line.textContent = r?.status === "error"
+      ? `Could not sync: ${r.message}`
+      : r?.status === "offline"
+      ? "Offline: your changes will sync when you are back online."
+      : syncing
+      ? "Syncing…"
+      : state.lastSyncAt
+      ? `Synced with ${state.email} · ${ago(state.lastSyncAt)}`
+      : `Signed in as ${state.email}`;
+  };
+
+  const syncer = installSync(store, {
+    onLoad: false,
+    onResult: async (r) => {
+      last = r;
+      if (r.status === "signed-out") {
+        ui.status.textContent = "Signed out — sign in again to sync.";
+        ui.status.classList.add("error");
+      }
+      if (r.status === "ok" && r.changed) await reload();
+      state = await store.syncState();
+      render();
+    },
+  });
+
+  const syncNow = async () => {
+    syncing = true;
+    render();
+    await syncer.now();
+    syncing = false;
+    state = await store.syncState();
+    render();
+  };
+  ui.now.addEventListener("click", () => void syncNow());
+
+  const finishOffer = async (upload: boolean) => {
+    offering = false;
+    if (upload) await store.queueAdds(await store.allEntries());
+    await syncNow();
+  };
+  ui.yes.addEventListener("click", () => void finishOffer(true));
+  ui.no.addEventListener("click", () => void finishOffer(false));
+
+  void (async () => {
+    try {
+      state = await store.syncState();
+      const me = await checkSignedIn();
+      known = true;
+      if (me.state === "unknown") {
+        render(); // offline: show what we know, the triggers retry later
+        return;
+      }
+      if (me.state === "out") {
+        if (state) {
+          await store.disableSync();
+          state = null;
+          ui.status.textContent = "Signed out — sign in again to sync.";
+          ui.status.classList.add("error");
+        }
+        render();
+        return;
+      }
+      if (!state || state.email !== me.email) {
+        // First time here for this account: sync starts from an empty cursor.
+        await store.enableSync(me.email);
+        state = await store.syncState();
+        const n = (await store.allEntries()).length;
+        if (n > 0) {
+          offering = true;
+          ui.offerText.textContent = `Add this browser's ${n} saved ${
+            n === 1 ? "record" : "records"
+          } to ${me.email}? Your other devices will get them too.`;
+          render();
+          return;
+        }
+      }
+      await syncNow();
+    } catch {
+      known = true;
+      render();
+    }
+  })();
+  render();
+  return syncer;
+}
+
+function attachHistoryTools(store: DeviceStore, reload: () => Promise<void>, syncer: Syncer) {
   document.getElementById("export-history")?.addEventListener("click", async () => {
     const records = await store.all();
     const backup: Backup = {
       app: "italic-practice",
-      version: 1,
+      version: BACKUP_VERSION,
       exported: new Date().toISOString(),
       records,
     };
@@ -417,6 +545,12 @@ function attachHistoryTools(store: DeviceStore, reload: () => Promise<void>) {
       if (data.app !== "italic-practice" || !Array.isArray(data.records)) {
         throw new Error("not a backup");
       }
+      // Version 1 files (before sync) have no ids; they are given one here.
+      // A file from a newer version of the app may mean something else.
+      if (typeof data.version === "number" && data.version > BACKUP_VERSION) {
+        say("That backup is from a newer version of this app, and can't be read here.", true);
+        return;
+      }
       const valid = data.records.filter(isRecord);
       const added = await store.merge(valid);
       const skipped = data.records.length - valid.length;
@@ -428,22 +562,28 @@ function attachHistoryTools(store: DeviceStore, reload: () => Promise<void>) {
             : "."),
       );
       await reload();
+      syncer.schedule();
     } catch {
       say("That file isn't a backup from this app.", true);
     }
   });
 
   document.getElementById("clear-history")?.addEventListener("click", async () => {
+    const signedIn = (await store.syncState()) !== null;
     if (
       !confirm(
-        "Delete every checked line on this device? Save a backup first if you might want it back.",
+        signedIn
+          ? "Delete every checked line on this device and in your account, so it disappears from your other devices too? Save a backup first if you might want it back."
+          : "Delete every checked line on this device? Save a backup first if you might want it back.",
       )
     ) {
       return;
     }
     await store.clear();
-    say("History cleared.");
+    say(signedIn ? "History cleared here and in your account." : "History cleared.");
     await reload();
+    // The deletions go up straight away, not after the debounce.
+    void syncer.now();
   });
 }
 

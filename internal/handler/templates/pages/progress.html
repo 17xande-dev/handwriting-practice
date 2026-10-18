@@ -5,7 +5,7 @@
 {{define "content"}}
 <div class="inner progress" id="progress">
   <h1>Progress</h1>
-  <p class="lede">Every line you check is kept here, on this device only.</p>
+  <p class="lede">Every line you check is kept here, on this device, and synced to your account if you sign in.</p>
 
   <p class="progress-empty" id="progress-empty" hidden>
     Nothing checked yet. Copy a line on a <a href="/">worksheet</a>, then tap
@@ -54,11 +54,31 @@
     </section>
   </div>
 
+  <section class="sync-card" aria-labelledby="sync-heading">
+    <h2 id="sync-heading">Sync</h2>
+    <p id="sync-out" hidden>
+      Your history is kept in this browser only.
+      <a href="/account?next=%2Fprogress">Sign in</a> to sync it with your other devices
+      and the iPad app.
+    </p>
+    <div id="sync-in" class="sync-line" hidden>
+      <span id="sync-line"></span>
+      <button type="button" id="sync-now">Sync now</button>
+      <a href="/account">Account</a>
+    </div>
+    <div id="sync-offer" class="sync-line" hidden>
+      <span id="sync-offer-text"></span>
+      <button type="button" id="sync-offer-yes">Add them</button>
+      <button type="button" id="sync-offer-no">Not now</button>
+    </div>
+    <p class="history-status" id="sync-status" role="status"></p>
+  </section>
+
   <section class="history-tools" aria-labelledby="history-heading">
     <h2 id="history-heading">Your history</h2>
     <p>
-      It is stored in this browser, so it stays on this iPad and nothing is sent
-      anywhere. Safari can clear a site's storage if it isn't used for a while;
+      It is stored in this browser, and nothing is sent anywhere unless you sign
+      in to sync. Safari can clear a site's storage if it isn't used for a while;
       adding this page to the Home Screen keeps it, and a backup file keeps it
       safe for good.
     </p>

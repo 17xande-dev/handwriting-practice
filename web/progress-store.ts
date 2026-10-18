@@ -1,12 +1,17 @@
 // Where checked lines are kept, so the progress page can show history.
 //
-// For now that is this device's browser (IndexedDB): nothing is sent to the
-// server and there are no accounts. Everything goes through the
-// ProgressStore interface, so a server-backed store with accounts can
-// replace it later without the pages changing.
+// The device's browser (IndexedDB) is the source of truth and works signed
+// out. When the user signs in (see sync.ts), the same store also queues what
+// is added and deleted, in the same transaction as the change itself, so a
+// crash can never leave a record unqueued. Everything the pages use goes
+// through the ProgressStore interface; the sync loop uses SyncStore.
 
 /** One checked practice line. */
 export interface CheckRecord {
+  /** Sync identity: a UUID, or a derived "legacy-…" one for a line checked before sync existed. */
+  id: string;
+  /** Always equal to `at`; the field the server and the iPad app order by. */
+  ts: number;
   /** When it was checked, ms since the epoch. */
   at: number;
   /** The worksheet's slug, or "custom" for the user's own text. */
@@ -24,23 +29,308 @@ export interface CheckRecord {
   metrics: { slantDiff: number; size: number; width: number; baseline: number };
 }
 
-export interface ProgressStore {
-  add(r: CheckRecord): Promise<void>;
-  all(): Promise<CheckRecord[]>;
-  /** Add records from a backup, skipping any already present. Returns how many were new. */
-  merge(rs: CheckRecord[]): Promise<number>;
-  clear(): Promise<void>;
+/** What a caller records: the identity is assigned by the store. */
+export type NewCheck = Omit<CheckRecord, "id" | "ts">;
+
+/**
+ * A record as it may arrive from a backup or an old database: well formed
+ * apart from an identity, which only records made before sync existed lack.
+ */
+export type LooseCheck = NewCheck & { id?: string; ts?: number };
+
+/**
+ * The quantized strokes of one checked attempt. The web does not write these
+ * yet; the store and the sync loop already carry them. Beyond the identity,
+ * the server and this store look at nothing, so the shape belongs to
+ * whoever writes them (docs/sync-api.md describes the agreed one).
+ */
+export interface InkRecord {
+  id: string;
+  ts: number;
+  /** The id of the check these strokes belong to. */
+  check: string;
+  [field: string]: unknown;
 }
 
+export type Kind = "check" | "ink";
+export const KINDS: Kind[] = ["check", "ink"];
+
+/** A record named without its data: a queued add, or a deletion. */
+export interface SyncEntry {
+  kind: Kind;
+  id: string;
+}
+
+/** Sync state; its absence means sync is off (signed out, or never signed in here). */
+export interface SyncState {
+  email: string;
+  /** The highest server seq seen; 0 pulls everything. */
+  cursor: number;
+  pendingAdds: SyncEntry[];
+  pendingDeletes: SyncEntry[];
+  lastSyncAt: number | null;
+}
+
+export interface ProgressStore {
+  /** Record a check, assigning its identity. Resolves to the stored record. */
+  add(r: NewCheck): Promise<CheckRecord>;
+  all(): Promise<CheckRecord[]>;
+  /** Add records from a backup, skipping any already present. Returns how many were new. */
+  merge(rs: LooseCheck[]): Promise<number>;
+  /** Delete every check and ink record, queuing their deletion while sync is on. */
+  clear(): Promise<void>;
+  /** Store the ink of a checked attempt. */
+  addInk(r: InkRecord): Promise<void>;
+  allInk(): Promise<InkRecord[]>;
+}
+
+/** What the sync loop needs from a store. Local history stays the source of truth. */
+export interface SyncStore {
+  syncState(): Promise<SyncState | null>;
+  /** Change the sync state atomically; does nothing while sync is off. */
+  updateSync(change: (s: SyncState) => void): Promise<void>;
+  /** Turn sync on for this account with nothing queued and an empty cursor. */
+  enableSync(email: string): Promise<void>;
+  /** Turn sync off (signed out). Local history stays. */
+  disableSync(): Promise<void>;
+  /**
+   * Bumped whenever sync is turned on or off. A sync that finds it changed
+   * while a request was in flight throws that response away: it belongs to a
+   * sign-in that is over.
+   */
+  readonly generation: number;
+  /** The local records of a kind with these ids, for a push. Missing ids are absent. */
+  localRecords(kind: Kind, ids: string[]): Promise<Map<string, unknown>>;
+  /** Store records pulled from the server. Returns how many were new. Queues nothing. */
+  mergeRecords(kind: Kind, records: unknown[]): Promise<number>;
+  /** Delete pulled tombstones locally. Returns the ids that were here. Queues nothing. */
+  removeIds(kind: Kind, ids: string[]): Promise<string[]>;
+}
+
+// ---- identity ----------------------------------------------------------------
+
+/**
+ * A fresh id. crypto.randomUUID needs a secure context, which the app is not
+ * on a plain-HTTP LAN address, so fall back to building a v4 UUID from
+ * getRandomValues, which works anywhere. Ids are opaque to everyone else.
+ */
+export function newId(): string {
+  const c = globalThis.crypto;
+  if (typeof c?.randomUUID === "function") return c.randomUUID();
+  const b = c.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** cyrb53: a small, stable, non-cryptographic 53-bit string hash, as lowercase hex. */
+export function cyrb53(s: string): string {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
+}
+
+/**
+ * The id given to a record that has none (a line checked before sync
+ * existed). It depends only on `at`, `sheet` and `line`, so every device
+ * computes the same id for the same old record, and syncing them does not
+ * make two copies. The exact derivation is in docs/sync-api.md, which the
+ * iPad app copies:
+ *
+ *   s  = String(trunc(at)) + "|" + sheet + "|" + line
+ *   id = "legacy-" + base36(trunc(at)) + "-" + hex(cyrb53(s))
+ *
+ * cyrb53 runs over the UTF-16 code units of s. Records made from now on get
+ * a random UUID instead.
+ */
+export function legacyId(r: Pick<NewCheck, "at" | "sheet" | "line">): string {
+  const at = Math.trunc(r.at);
+  return `legacy-${at.toString(36)}-${cyrb53(`${at}|${r.sheet}|${r.line}`)}`;
+}
+
+/** Give a record its sync identity: the id it has, or a legacy one, and ts = at. */
+export function identify(r: LooseCheck): CheckRecord {
+  const id = typeof r.id === "string" && r.id.length >= 1 && r.id.length <= 64 ? r.id : legacyId(r);
+  return { ...r, id, ts: r.at };
+}
+
+/** Whether a stored value is a check that can be given an identity, even if it fails isRecord. */
+function identifiable(x: unknown): x is LooseCheck {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  return typeof r.at === "number" && Number.isFinite(r.at) && typeof r.sheet === "string" &&
+    typeof r.line === "string";
+}
+
+/** A record's identity for de-duplicating backups: the same line checked at the same moment. */
+export function key(r: NewCheck): string {
+  return `${r.at}|${r.sheet}|${r.line}`;
+}
+
+/**
+ * Whether a value from a backup file or the server is a well-formed record.
+ * Those are outside input, so their contents are checked, not trusted. An id
+ * is optional (old records have none) but must be sane when present.
+ */
+export function isRecord(x: unknown): x is LooseCheck {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  const str = (v: unknown, max: number) => typeof v === "string" && v.length <= max;
+  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+  return (r.id === undefined ||
+    (typeof r.id === "string" && r.id.length >= 1 && r.id.length <= 64)) &&
+    (r.ts === undefined || num(r.ts)) &&
+    num(r.at) && str(r.sheet, 64) && str(r.sheetTitle, 200) && str(r.line, 200) &&
+    str(r.model, 64) && str(r.modelName, 200) && (r.pen === "monoline" || r.pen === "edged") &&
+    num(r.score) && (r.score as number) >= 0 && (r.score as number) <= 100 &&
+    Array.isArray(r.letters) && r.letters.length <= 200 &&
+    r.letters.every((l) =>
+      typeof l === "object" && l !== null && str((l as Record<string, unknown>).char, 8) &&
+      num((l as Record<string, unknown>).score) &&
+      typeof (l as Record<string, unknown>).missing === "boolean"
+    ) &&
+    typeof r.metrics === "object" && r.metrics !== null;
+}
+
+/** The generic shape sync needs of any record: an id and a timestamp. */
+export function hasIdentity(x: unknown): x is { id: string; ts: number } {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  return typeof r.id === "string" && r.id.length >= 1 && r.id.length <= 64 &&
+    typeof r.ts === "number" && Number.isFinite(r.ts) && r.ts > 0;
+}
+
+/**
+ * Decide what a merge adds: the valid records not already here by id or by
+ * backup identity, each given its identity. Pure, so the IndexedDB store and
+ * the tests share it.
+ */
+export function planMerge(
+  have: CheckRecord[],
+  incoming: unknown[],
+): { fresh: CheckRecord[]; invalid: number; duplicate: number } {
+  const ids = new Set(have.map((r) => r.id));
+  const keys = new Set(have.map(key));
+  const fresh: CheckRecord[] = [];
+  let invalid = 0, duplicate = 0;
+  for (const x of incoming) {
+    if (!isRecord(x)) {
+      invalid++;
+      continue;
+    }
+    const r = identify(x);
+    if (ids.has(r.id) || keys.has(key(r))) {
+      duplicate++;
+      continue;
+    }
+    ids.add(r.id);
+    keys.add(key(r));
+    fresh.push(r);
+  }
+  return { fresh, invalid, duplicate };
+}
+
+// ---- the queue ----------------------------------------------------------------
+
+export const entryKey = (e: SyncEntry): string => `${e.kind}:${e.id}`;
+
+/** Queue new records for the next sync. */
+export function queueAdds(s: SyncState, entries: SyncEntry[]): void {
+  const have = new Set(s.pendingAdds.map(entryKey));
+  for (const e of entries) {
+    if (!have.has(entryKey(e))) s.pendingAdds.push(e);
+    have.add(entryKey(e));
+  }
+}
+
+/** Queue deletions, and forget any not-yet-sent adds of the same records. */
+export function queueDeletes(s: SyncState, entries: SyncEntry[]): void {
+  const gone = new Set(entries.map(entryKey));
+  s.pendingAdds = s.pendingAdds.filter((e) => !gone.has(entryKey(e)));
+  const have = new Set(s.pendingDeletes.map(entryKey));
+  for (const e of entries) {
+    if (!have.has(entryKey(e))) s.pendingDeletes.push(e);
+    have.add(entryKey(e));
+  }
+}
+
+/** A stored sync state, or null unless it is well formed. */
+export function parseSyncState(raw: unknown): SyncState | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.email !== "string" || typeof r.cursor !== "number" || !Number.isFinite(r.cursor)) {
+    return null;
+  }
+  const entries = (v: unknown): SyncEntry[] =>
+    Array.isArray(v)
+      ? v.filter((e): e is SyncEntry =>
+        typeof e === "object" && e !== null && typeof (e as SyncEntry).id === "string" &&
+        KINDS.includes((e as SyncEntry).kind)
+      ).map((e) => ({ kind: e.kind, id: e.id }))
+      : [];
+  return {
+    email: r.email,
+    cursor: r.cursor,
+    pendingAdds: entries(r.pendingAdds),
+    pendingDeletes: entries(r.pendingDeletes),
+    lastSyncAt: typeof r.lastSyncAt === "number" && Number.isFinite(r.lastSyncAt)
+      ? r.lastSyncAt
+      : null,
+  };
+}
+
+export function freshSyncState(email: string): SyncState {
+  return { email, cursor: 0, pendingAdds: [], pendingDeletes: [], lastSyncAt: null };
+}
+
+// ---- IndexedDB ----------------------------------------------------------------
+
 const dbName = "italic-practice";
-const storeName = "checks";
+// Version 2 adds the id index on checks, the ink and meta stores, and gives
+// every existing check its identity.
+const dbVersion = 2;
+const checks = "checks";
+const ink = "ink";
+const meta = "meta";
+const syncKey = "sync";
 
 function open(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(dbName, 1);
-    req.onupgradeneeded = () => {
-      const s = req.result.createObjectStore(storeName, { autoIncrement: true });
-      s.createIndex("at", "at");
+    const req = indexedDB.open(dbName, dbVersion);
+    req.onupgradeneeded = (ev) => {
+      const db = req.result;
+      const tx = req.transaction!;
+      let s: IDBObjectStore;
+      if (ev.oldVersion < 1) {
+        s = db.createObjectStore(checks, { autoIncrement: true });
+        s.createIndex("at", "at");
+      } else {
+        s = tx.objectStore(checks);
+      }
+      if (ev.oldVersion < 2) {
+        s.createIndex("id", "id");
+        db.createObjectStore(ink, { keyPath: "id" });
+        db.createObjectStore(meta);
+        // Persist an identity on every record made before sync existed, so
+        // the id a line is synced under never changes afterwards. Only the id
+        // and ts are added: a record this code does not fully understand (a
+        // newer client's) keeps every other field exactly as it was.
+        s.openCursor().onsuccess = (e) => {
+          const cur = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+          if (!cur) return;
+          if (identifiable(cur.value) && cur.value.id === undefined) {
+            cur.update(identify(cur.value));
+          }
+          cur.continue();
+        };
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -55,73 +345,219 @@ function done(tx: IDBTransaction): Promise<void> {
   });
 }
 
-/** A record's identity for de-duplicating backups: the same line checked at the same moment. */
-function key(r: CheckRecord): string {
-  return `${r.at}|${r.sheet}|${r.line}`;
+function result<T>(req: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
 }
 
-export class DeviceStore implements ProgressStore {
+/** Read-modify-write the sync state inside a transaction that is already open. */
+function changeSync(tx: IDBTransaction, change: (s: SyncState) => void): void {
+  const m = tx.objectStore(meta);
+  m.get(syncKey).onsuccess = (e) => {
+    const s = parseSyncState((e.target as IDBRequest).result);
+    if (!s) return;
+    change(s);
+    m.put(s, syncKey);
+  };
+}
+
+export class DeviceStore implements ProgressStore, SyncStore {
   #db: Promise<IDBDatabase> | null = null;
+  #generation = 0;
 
   #open(): Promise<IDBDatabase> {
     return (this.#db ??= open());
   }
 
-  async add(r: CheckRecord): Promise<void> {
-    const tx = (await this.#open()).transaction(storeName, "readwrite");
-    tx.objectStore(storeName).add(r);
+  get generation(): number {
+    return this.#generation;
+  }
+
+  async add(r: NewCheck): Promise<CheckRecord> {
+    const rec = identify({ ...r, id: newId() });
+    const tx = (await this.#open()).transaction([checks, meta], "readwrite");
+    tx.objectStore(checks).add(rec);
+    changeSync(tx, (s) => queueAdds(s, [{ kind: "check", id: rec.id }]));
     await done(tx);
+    return rec;
   }
 
   async all(): Promise<CheckRecord[]> {
-    const tx = (await this.#open()).transaction(storeName, "readonly");
-    const req = tx.objectStore(storeName).index("at").getAll();
+    const tx = (await this.#open()).transaction(checks, "readonly");
+    const req = tx.objectStore(checks).index("at").getAll();
     await done(tx);
     return req.result as CheckRecord[];
   }
 
-  async merge(rs: CheckRecord[]): Promise<number> {
-    const have = new Set((await this.all()).map(key));
-    const fresh = rs.filter((r) => isRecord(r) && !have.has(key(r)));
-    const tx = (await this.#open()).transaction(storeName, "readwrite");
-    const s = tx.objectStore(storeName);
+  async merge(rs: LooseCheck[]): Promise<number> {
+    const { fresh } = planMerge(await this.all(), rs);
+    if (!fresh.length) return 0;
+    const tx = (await this.#open()).transaction([checks, meta], "readwrite");
+    const s = tx.objectStore(checks);
     for (const r of fresh) s.add(r);
+    changeSync(tx, (st) => queueAdds(st, fresh.map((r) => ({ kind: "check", id: r.id }))));
     await done(tx);
     return fresh.length;
   }
 
   async clear(): Promise<void> {
-    const tx = (await this.#open()).transaction(storeName, "readwrite");
-    tx.objectStore(storeName).clear();
+    const tx = (await this.#open()).transaction([checks, ink, meta], "readwrite");
+    const gone: SyncEntry[] = [];
+    // Read the ids and clear in one transaction, so a check added in between
+    // is neither lost from the queue nor left behind undeleted.
+    tx.objectStore(checks).getAll().onsuccess = (e) => {
+      for (const r of (e.target as IDBRequest<CheckRecord[]>).result) {
+        if (typeof r.id === "string") gone.push({ kind: "check", id: r.id });
+      }
+      tx.objectStore(checks).clear();
+    };
+    tx.objectStore(ink).getAllKeys().onsuccess = (e) => {
+      for (const id of (e.target as IDBRequest<IDBValidKey[]>).result) {
+        gone.push({ kind: "ink", id: String(id) });
+      }
+      tx.objectStore(ink).clear();
+      changeSync(tx, (s) => queueDeletes(s, gone));
+    };
     await done(tx);
   }
-}
 
-/**
- * Whether a value from a backup file is a well-formed record. A backup is a
- * file the user picks, so its contents are checked, not trusted.
- */
-export function isRecord(x: unknown): x is CheckRecord {
-  if (typeof x !== "object" || x === null) return false;
-  const r = x as Record<string, unknown>;
-  const str = (v: unknown, max: number) => typeof v === "string" && v.length <= max;
-  const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
-  return num(r.at) && str(r.sheet, 64) && str(r.sheetTitle, 200) && str(r.line, 200) &&
-    str(r.model, 64) && str(r.modelName, 200) && (r.pen === "monoline" || r.pen === "edged") &&
-    num(r.score) && (r.score as number) >= 0 && (r.score as number) <= 100 &&
-    Array.isArray(r.letters) && r.letters.length <= 200 &&
-    r.letters.every((l) =>
-      typeof l === "object" && l !== null && str((l as Record<string, unknown>).char, 8) &&
-      num((l as Record<string, unknown>).score) &&
-      typeof (l as Record<string, unknown>).missing === "boolean"
-    ) &&
-    typeof r.metrics === "object" && r.metrics !== null;
+  async addInk(r: InkRecord): Promise<void> {
+    const tx = (await this.#open()).transaction([ink, meta], "readwrite");
+    tx.objectStore(ink).put(r);
+    changeSync(tx, (s) => queueAdds(s, [{ kind: "ink", id: r.id }]));
+    await done(tx);
+  }
+
+  async allInk(): Promise<InkRecord[]> {
+    const tx = (await this.#open()).transaction(ink, "readonly");
+    const req = tx.objectStore(ink).getAll();
+    await done(tx);
+    return req.result as InkRecord[];
+  }
+
+  // ---- SyncStore ----
+
+  async syncState(): Promise<SyncState | null> {
+    const tx = (await this.#open()).transaction(meta, "readonly");
+    return parseSyncState(await result(tx.objectStore(meta).get(syncKey)));
+  }
+
+  async updateSync(change: (s: SyncState) => void): Promise<void> {
+    const tx = (await this.#open()).transaction(meta, "readwrite");
+    changeSync(tx, change);
+    await done(tx);
+  }
+
+  async enableSync(email: string): Promise<void> {
+    this.#generation++;
+    const tx = (await this.#open()).transaction(meta, "readwrite");
+    tx.objectStore(meta).put(freshSyncState(email), syncKey);
+    await done(tx);
+  }
+
+  async disableSync(): Promise<void> {
+    this.#generation++;
+    const tx = (await this.#open()).transaction(meta, "readwrite");
+    tx.objectStore(meta).delete(syncKey);
+    await done(tx);
+  }
+
+  /** Every local record, as entries: the "add this browser's checks" offer. */
+  async allEntries(): Promise<SyncEntry[]> {
+    const tx = (await this.#open()).transaction([checks, ink], "readonly");
+    const c = tx.objectStore(checks).getAll();
+    const i = tx.objectStore(ink).getAllKeys();
+    await done(tx);
+    return [
+      ...(c.result as CheckRecord[]).filter((r) => typeof r.id === "string").map((r) => ({
+        kind: "check" as const,
+        id: r.id,
+      })),
+      ...i.result.map((id) => ({ kind: "ink" as const, id: String(id) })),
+    ];
+  }
+
+  /** Queue records for the next sync (a no-op while sync is off). */
+  async queueAdds(entries: SyncEntry[]): Promise<void> {
+    if (entries.length) await this.updateSync((s) => queueAdds(s, entries));
+  }
+
+  async localRecords(kind: Kind, ids: string[]): Promise<Map<string, unknown>> {
+    const out = new Map<string, unknown>();
+    if (!ids.length) return out;
+    if (kind === "ink") {
+      const tx = (await this.#open()).transaction(ink, "readonly");
+      const reqs = ids.map((id) => tx.objectStore(ink).get(id));
+      await done(tx);
+      for (const q of reqs) if (q.result) out.set((q.result as InkRecord).id, q.result);
+      return out;
+    }
+    const want = new Set(ids);
+    for (const r of await this.all()) if (want.has(r.id)) out.set(r.id, r);
+    return out;
+  }
+
+  async mergeRecords(kind: Kind, records: unknown[]): Promise<number> {
+    if (kind === "check") {
+      const { fresh } = planMerge(await this.all(), records);
+      if (!fresh.length) return 0;
+      const tx = (await this.#open()).transaction(checks, "readwrite");
+      for (const r of fresh) tx.objectStore(checks).add(r);
+      await done(tx);
+      return fresh.length;
+    }
+    const have = new Set((await this.allInk()).map((r) => r.id));
+    const fresh = records.filter(hasIdentity).filter((r) => !have.has(r.id));
+    if (!fresh.length) return 0;
+    const tx = (await this.#open()).transaction(ink, "readwrite");
+    for (const r of fresh) tx.objectStore(ink).put(r);
+    await done(tx);
+    return fresh.length;
+  }
+
+  async removeIds(kind: Kind, ids: string[]): Promise<string[]> {
+    if (!ids.length) return [];
+    const gone: string[] = [];
+    if (kind === "ink") {
+      const tx = (await this.#open()).transaction(ink, "readwrite");
+      const s = tx.objectStore(ink);
+      for (const id of ids) {
+        s.getKey(id).onsuccess = (e) => {
+          if ((e.target as IDBRequest).result !== undefined) {
+            gone.push(id);
+            s.delete(id);
+          }
+        };
+      }
+      await done(tx);
+      return gone;
+    }
+    const drop = new Set(ids);
+    const tx = (await this.#open()).transaction(checks, "readwrite");
+    const s = tx.objectStore(checks);
+    s.openCursor().onsuccess = (e) => {
+      const cur = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (!cur) return;
+      if (drop.has((cur.value as CheckRecord).id)) {
+        gone.push((cur.value as CheckRecord).id);
+        cur.delete();
+      }
+      cur.continue();
+    };
+    await done(tx);
+    return gone;
+  }
 }
 
 /** The backup file: a version, so a future format can still read old files. */
 export interface Backup {
   app: "italic-practice";
-  version: 1;
+  /** 2 carries each record's id and ts; 1 (older files) has neither, and is still read. */
+  version: 1 | 2;
   exported: string;
-  records: CheckRecord[];
+  records: LooseCheck[];
 }
+
+export const BACKUP_VERSION = 2;

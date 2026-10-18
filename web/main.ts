@@ -11,6 +11,7 @@ import { drawPreview } from "./preview.ts";
 import { attachWritingArea } from "./pen.ts";
 import { Row, type Theme } from "./row.ts";
 import { DeviceStore } from "./progress-store.ts";
+import { installSync } from "./sync-triggers.ts";
 import { type Settings, Toolbar } from "./settings.ts";
 
 function cssVar(name: string, fallback: string): string {
@@ -176,8 +177,10 @@ function main() {
 
   attachSheetCheck(rows);
 
-  // Every check is kept on this device for the progress page.
+  // Every check is kept on this device for the progress page, and synced to
+  // the account when signed in (nothing happens while signed out).
   const store = new DeviceStore();
+  const syncer = installSync(store);
   const modelName = () => {
     const s = toolbar.read();
     if (s.model === "custom") return customLoaded || s.customFont || "Google font";
@@ -197,7 +200,7 @@ function main() {
         score: result.score,
         letters: result.letters.map(({ char, score, missing }) => ({ char, score, missing })),
         metrics: result.metrics,
-      }).catch(() => {
+      }).then(() => syncer.schedule()).catch(() => {
         // Storage unavailable (private browsing, quota): the check still shows.
       });
     };
