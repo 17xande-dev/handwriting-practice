@@ -1,0 +1,56 @@
+# The Docker host's stack: the app, and a Cloudflare tunnel that is the only
+# way in. Nothing is published on the host; the tunnel reaches the app over
+# this file's own compose network, where the service name resolves, so the
+# tunnel's ingress (set in the Cloudflare dashboard, as the tunnel is remotely
+# managed) is `http://handwriting:8080`.
+#
+#   make deploy        copies the tree to the host and runs
+#                      docker compose -f compose.prod.yaml up -d --build
+#
+# TUNNEL_TOKEN comes from a .env file beside this one (see .env.example); .env
+# is gitignored and must be created on the host, never committed.
+services:
+  handwriting:
+    build: .
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      ADDR: ":8080"
+      # On the named volume below, so a redeploy keeps it. Daily VACUUM INTO
+      # backups land beside it, in /data/backups.
+      DB_PATH: /data/handwriting.db
+      # Cloudflare terminates https in front of it, so the browser always sees
+      # https.
+      HSTS: "1"
+      # Cloudflare overwrites this header with the connecting address, which
+      # is why it is preferred over X-Forwarded-For (a list a client can
+      # prepend to). Safe only because nothing but the tunnel can reach the
+      # port: it is not published.
+      CLIENT_IP_HEADER: CF-Connecting-IP
+    # argon2id holds 64 MiB per sign-in (three at a time at most), and SQLite
+    # a page cache; this keeps a runaway from taking the host.
+    mem_limit: 512m
+    volumes:
+      - data:/data
+    healthcheck:
+      # The runtime image is distroless (no shell, no wget), so the binary
+      # probes itself.
+      test: ["CMD", "/calligraphy", "-healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  cloudflared:
+    # Pinned: `latest` would change what runs on the next `up --build`.
+    image: cloudflare/cloudflared:2026.10.0
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    depends_on:
+      handwriting:
+        condition: service_healthy
+
+volumes:
+  data:

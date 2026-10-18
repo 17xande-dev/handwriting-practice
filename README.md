@@ -298,9 +298,20 @@ devices at `/account`.
 - **Sessions** are a table holding only the sha256 of an opaque token: the
   `hp_session` cookie in a browser, a bearer token from `POST /api/token` for
   the iPad. Passwords are argon2id (12 characters minimum, nothing else). Every
-  endpoint that verifies a password is rate-limited (five tries per email, then
-  one a minute, plus a per-IP ceiling), and a failed sign-in costs the same
-  whatever the cause.
+  endpoint that verifies a password is rate-limited (five tries per email, keyed
+  on a hash of it, then one a minute; plus a per-IP ceiling of ten in a burst,
+  where an IPv6 client counts by its /64), and a failed sign-in costs the same
+  whatever the cause. At most three argon2 computations run at once in the
+  process; a fourth waits up to two seconds and then gets `503` with
+  `Retry-After`, so a burst cannot exhaust memory. Form bodies are capped
+  (4 KB; 8 KB for the password form), emails over 254 bytes or not a bare
+  address are refused before they reach the limiter, and failed sign-ins and
+  limit hits are logged with a hash prefix of the email and the client IP,
+  never a password or token. Signing in over a live session ends that old one.
+  Signing out, or signing in as someone else, clears the browser's local sync
+  state, and every sync request names the account it expects (`409` on a
+  mismatch), so a shared browser cannot push one person's history into
+  another's account.
 - **Cookie.** `Secure`, `HttpOnly`, `SameSite=Lax`. Browsers accept a `Secure`
   cookie from `https://` and from `http://localhost`, so local development
   works; a plain-HTTP LAN address cannot sign in on the web (the app can).
@@ -315,36 +326,65 @@ devices at `/account`.
   The web client (`web/sync.ts`) syncs on page load, when the tab becomes
   visible or the network returns, a few seconds after a check, and from the
   Sync card on Progress. The first time it sees a signed-in browser it offers to
-  upload the checks already on the device. Signed out, nothing changes.
+  upload the checks already on the device. Signed out, nothing changes. Requests
+  are capped (about 4 MB of JSON and 500 records pushed, at most 1000 records
+  and 1000 deletions accepted; a pull page holds at most 1000 changes and 4 MB
+  of data), and the client halves a batch the server refuses as too large.
 
 **Deploying.** `compose.yaml` runs the one container with a named `data` volume
 at `/data` (`DB_PATH=/data/handwriting.db`; a daily `VACUUM INTO` backup lands
-in `/data/backups`, the last seven kept). Put it behind your reverse proxy,
-which terminates TLS. Two environment variables depend on the proxy:
-`HSTS=1` once the site is served over https (never before: it pins the
-browser), and `CLIENT_IP_HEADER` (for example `X-Forwarded-For` or
-`X-Real-IP`) so the per-IP sign-in limit sees visitors, not the proxy. Only set
-it when every request arrives through that proxy, or anyone can pick their own
-rate-limit bucket. Left empty it uses the connection's address. The
-distroless image has no shell, so the healthcheck is the binary probing
-itself (`/calligraphy -healthcheck`). It is one instance on one SQLite file:
-a second instance is the point at which this needs Postgres. The off-box
+in `/data/backups`, the last seven kept) and a 512 MB memory limit. Two
+environment variables depend on the proxy: `HSTS=1` once the site is served
+over https (never before: it pins the browser), and `CLIENT_IP_HEADER` so the
+per-IP sign-in limit sees visitors, not the proxy. Prefer a single-value header
+the proxy overwrites, such as `CF-Connecting-IP` (Cloudflare) or `X-Real-IP`.
+`X-Forwarded-For` also works, but only its rightmost entry (the one your own
+proxy appended) is trusted, because the client controls everything before it.
+Only set the variable when every request arrives through that proxy, or anyone
+can pick their own rate-limit bucket. Left empty it uses the connection's
+address. The distroless image has no shell, so the healthcheck is the binary
+probing itself (`/calligraphy -healthcheck`). It is one instance on one SQLite
+file: a second instance is the point at which this needs Postgres. The off-box
 copy of `/data/backups` is a decision still open. `make build` and `go run`
 need cgo (SQLite); the Dockerfile builds a static musl binary and, because
 the TypeScript bundles are checked in and `make check` fails when they are
 stale, has no Deno stage.
 
-### Your own text
+### Production: Docker host and Cloudflare Tunnel
 
-"Your own text" on the index takes typed or pasted text and turns each line
-into a model, wrapping long lines at 28 characters and dropping control and
-invisible characters (`sheets.Custom`). The text only ever travels in a POST
-body, never in a URL: a URL would put it in browser history, server and proxy
-logs and Referer headers, and would let someone else craft a link that puts
-words in front of you. Nothing is stored on the server, the pages carrying
-the text are sent `Cache-Control: no-store`, and "Edit this text" posts it
-back to the form. The device remembers the last text in local storage, so
-the form isn't empty next time. There is no sharing, by design.
+`compose.prod.yaml` is the stack for the Docker host: the `handwriting` service
+(no published ports, `HSTS=1`, `CLIENT_IP_HEADER=CF-Connecting-IP`, 512 MB) and
+a pinned `cloudflared` that runs the tunnel on the same compose network, so a
+remotely-managed tunnel's ingress `http://handwriting:8080` resolves. Nothing
+else can reach the app, which is what makes trusting `CF-Connecting-IP` safe.
+
+One-time, on the host: create `~/handwriting/.env` from `.env.example` with
+`TUNNEL_TOKEN` (from the Cloudflare Zero Trust dashboard; `.env` is gitignored
+and never copied by `make deploy`). Then, from a clean checkout of the commit
+to ship:
+
+```sh
+make deploy                              # DEPLOY_HOST=ubuntu@192.168.0.30 by default
+make deploy DEPLOY_HOST=user@other-host
+```
+
+which is `git archive HEAD | ssh $DEPLOY_HOST 'mkdir -p ~/handwriting && tar -x -C ~/handwriting'`
+followed by `ssh $DEPLOY_HOST 'cd ~/handwriting && sudo docker compose -f compose.prod.yaml up -d --build'`.
+The named volume keeps the database across deploys. The first admin on the host:
+`sudo docker compose -f compose.prod.yaml exec handwriting /calligraphy -add-admin you@example.com`.
+
+Cloudflare settings for the hostname:
+
+- The tunnel's public hostname points at `http://handwriting:8080`. Do not set
+  an `httpHostHeader` override: the cross-origin check compares `Origin` with
+  the request's `Host`, so rewriting `Host` breaks every sign-in and sync POST.
+- Turn off Email Obfuscation and Rocket Loader for this hostname (a
+  Configuration Rule, or Speed and Scrape Shield). Both rewrite served pages
+  and scripts, which the strict CSP (`script-src 'self'`) then refuses, and
+  the account pages contain email addresses.
+- Optional, as a second layer in front of the app's own limits: a Cloudflare
+  rate-limiting rule on `POST /account/login` and `POST /api/token` (for
+  example 10 requests per minute per IP, then block for a minute).
 
 ## Security
 
