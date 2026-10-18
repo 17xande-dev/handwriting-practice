@@ -302,7 +302,7 @@ func TestSyncInkRecordSizeLimit(t *testing.T) {
 		return fmt.Sprintf(`{"id":%q,"ts":1700000000000,"check":"c1","strokes":"%s"}`, id, strings.Repeat("x", n))
 	}
 	res := s.sync(t, `{"cursor":0,"push":{"ink":[`+ink("small", 60<<10)+`,`+ink("big", 65<<10)+`]}}`, token, "")
-	if len(res.Records["ink"]) != 1 || len(res.Rejected) != 1 || res.Rejected[0].Kind != "ink" {
+	if len(res.Records["ink"]) != 1 || len(res.Rejected) != 1 || res.Rejected[0].Kind != "ink" || res.Rejected[0].ID != "big" {
 		t.Fatalf("records %d, rejected %+v", len(res.Records["ink"]), res.Rejected)
 	}
 }

@@ -212,8 +212,7 @@ Response (always every key, always arrays, never `null`):
 - **Server checks:** each pushed record must be a JSON object with a string `id` (1-64 characters), a
   positive numeric `ts`, and at most 64 KB. An unknown kind is rejected too. Anything else lands in
   `rejected` and the rest of the push is still stored. Drop rejected records from the pending list
-  rather than resending them for ever. (A record rejected for its size has an empty `id`: match it by
-  kind and drop the batch's oversized records.)
+  rather than resending them for ever. A record rejected for its size still carries its `id`.
 - **Order:** the push is applied first (records, then deletions), then changes after `cursor` are
   returned. The client's own just-pushed records therefore come back in `records`; merging by id makes
   that harmless.

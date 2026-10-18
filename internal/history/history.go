@@ -59,15 +59,20 @@ func CheckRecord(kind string, raw json.RawMessage) (string, error) {
 	if !validKind(kind) {
 		return "", fmt.Errorf("unknown kind %q", kind)
 	}
-	if len(raw) > MaxRecordBytes {
-		return "", fmt.Errorf("record over %d bytes", MaxRecordBytes)
-	}
 	var head struct {
 		ID *string  `json:"id"`
 		TS *float64 `json:"ts"`
 	}
 	if raw == nil || raw[0] != '{' || json.Unmarshal(raw, &head) != nil {
 		return "", fmt.Errorf("not a JSON object")
+	}
+	// An oversized record still reports its id, so the client can match the
+	// rejection to its queue and stop resending it.
+	if len(raw) > MaxRecordBytes {
+		if head.ID != nil && len(*head.ID) >= 1 && len(*head.ID) <= 64 {
+			return *head.ID, fmt.Errorf("record over %d bytes", MaxRecordBytes)
+		}
+		return "", fmt.Errorf("record over %d bytes", MaxRecordBytes)
 	}
 	if head.ID == nil || len(*head.ID) == 0 || len(*head.ID) > 64 {
 		return "", fmt.Errorf("id must be a string of 1-64 characters")
