@@ -58,3 +58,32 @@ for (const c of fixture.cases) {
     assertSame(got, c.result, c.name);
   });
 }
+
+// The distortions exist so each note the check can give is pinned by a
+// fixture: width, size, baseline and slant. If a case stops producing its
+// note, the fixture no longer covers it and the Swift port loses its check.
+Deno.test("distorted writings exercise the width, size, baseline and slant notes", () => {
+  const notes = (name: string) =>
+    fixture.cases.find((c) => c.name === name)?.result?.notes.join(" | ") ?? "(missing case)";
+  assertEquals(
+    fixture.cases.map((c) => c.name),
+    [
+      "perfect",
+      "shifted",
+      "wobble06",
+      "wobble10",
+      "wobble15",
+      "wide",
+      "tall",
+      "low",
+      "sheared",
+      "missing-letter",
+      "empty",
+    ],
+  );
+  assert(notes("wide").includes("wider than the model"), notes("wide"));
+  assert(notes("tall").includes("tall"), notes("tall"));
+  assert(notes("low").includes("short"), notes("low"));
+  assert(notes("low").includes("below the baseline"), notes("low"));
+  assert(notes("sheared").includes("more than the model"), notes("sheared"));
+});

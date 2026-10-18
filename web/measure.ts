@@ -23,7 +23,11 @@ export function fontString(f: { style: string; family: string }, px: number): st
 
 export function measureFont(family: string, style: string, slant: number): FontInfo {
   const ctx = document.createElement("canvas").getContext("2d")!;
-  const size = 100;
+  // Large, because actualBoundingBox* is quantised to whole pixels and
+  // anti-alias-inflated: at 100 px that is 1-4% of an x-height, which made
+  // web models render small against the exact CoreText bounds the iPad uses.
+  // At 1000 px the error is a tenth of that. Only ratios leave this function.
+  const size = 1000;
   ctx.font = fontString({ style, family }, size);
   const ascent = (ch: string) => ctx.measureText(ch).actualBoundingBoxAscent;
   const x = ascent("x");

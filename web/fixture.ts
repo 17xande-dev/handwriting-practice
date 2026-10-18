@@ -170,6 +170,37 @@ function shift(strokes: Stroke[], du: number, dv: number): Stroke[] {
   }));
 }
 
+/** Every point moved by `f`. */
+function mapPoints(
+  strokes: Stroke[],
+  f: (p: Stroke["points"][number]) => { u: number; v: number },
+) {
+  return strokes.map((s) => ({ pen: s.pen, points: s.points.map((p) => ({ ...p, ...f(p) })) }));
+}
+
+/**
+ * Writing that differs from the model in one measured way, so each of the
+ * width, size, baseline and slant notes is exercised (v is in x-heights,
+ * baseline 0, up negative; u grows to the right):
+ *   wide    u x 1.4: letters wider than the model (raster widening)
+ *   tall    v x 1.25: letters taller than the model
+ *   low     scaled to 0.8 and dropped 0.2 x-height: small, below the baseline
+ *   sheared an extra +8 degrees of rightward slant
+ */
+export function distort(strokes: Stroke[], kind: "wide" | "tall" | "low" | "sheared"): Stroke[] {
+  const tan8 = Math.tan((8 * Math.PI) / 180);
+  switch (kind) {
+    case "wide":
+      return mapPoints(strokes, (p) => ({ u: p.u * 1.4, v: p.v }));
+    case "tall":
+      return mapPoints(strokes, (p) => ({ u: p.u, v: p.v * 1.25 }));
+    case "low":
+      return mapPoints(strokes, (p) => ({ u: p.u * 0.8, v: p.v * 0.8 + 0.2 }));
+    case "sheared":
+      return mapPoints(strokes, (p) => ({ u: p.u - p.v * tan8, v: p.v }));
+  }
+}
+
 /**
  * Independent uniform noise of +/- `amp` x-heights on every point's u and v,
  * in stroke then point order: u first, then v, each `(2 * rand() - 1) * amp`.
@@ -231,6 +262,10 @@ export function buildFixture(m: ModelRaster, fontId: string): Fixture {
     ["perfect", perfect],
     ["shifted", shift(perfect, 0.3, 0)],
     ...wobbles.map(([name, amp, seed]) => [name, wobble(perfect, amp, seed)] as [string, Stroke[]]),
+    ["wide", distort(perfect, "wide")],
+    ["tall", distort(perfect, "tall")],
+    ["low", distort(perfect, "low")],
+    ["sheared", distort(perfect, "sheared")],
     ["missing-letter", dropLetter(perfect, m, missingLetterIndex(m.text))],
     ["empty", []],
   ];
