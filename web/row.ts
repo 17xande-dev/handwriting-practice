@@ -203,6 +203,10 @@ export class Row {
   get text(): string {
     return this.#text;
   }
+  /** The model font the line was last laid out with, if it has been. */
+  get font(): FontInfo | null {
+    return this.#font;
+  }
   get result(): CheckResult | null {
     return this.#result;
   }

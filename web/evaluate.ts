@@ -25,7 +25,7 @@ import type { Stroke } from "./ink.ts";
 import { type FontInfo, fontString } from "./measure.ts";
 
 /** Analysis pixels per x-height. */
-const S = 40;
+export const S = 40;
 /**
  * Credit for a line's distance from the model's centreline: full within
  * `full`, nothing beyond `zero`, graded between (see evalcore.credit).
@@ -38,6 +38,10 @@ const zero = 0.2 * S;
 export interface LetterResult {
   char: string;
   score: number;
+  /** How closely the writing follows the model's centreline, 0–1. */
+  precision: number;
+  /** How much of the model's centreline the writing follows, 0–1. */
+  coverage: number;
   missing: boolean;
 }
 
@@ -61,14 +65,49 @@ export interface CheckResult {
   notes: string[];
   /** For each stroke, for each point: 0 on the model, 1 near, 2 off. */
   pointClass: number[][];
-  /** The model, placed where the user wrote it, and its unreached parts. */
-  overlay: HTMLCanvasElement;
+  /**
+   * The model, placed where the user wrote it, and its unreached parts.
+   * Drawn on demand, since only the browser can and a check needs no canvas.
+   */
+  overlay: () => HTMLCanvasElement;
   /** Analysis-space frame, for drawing the overlay on a band. */
   frame: { uMin: number; vTop: number; tan: number };
 }
 
-/** The model line rendered into the analysis frame. */
+/**
+ * The model line rendered into the analysis frame: everything the scoring
+ * needs from a font, and nothing that needs a browser. A port with its own
+ * renderer supplies this and calls `checkWithModel`.
+ */
+export interface ModelRaster {
+  /** The model text; its characters (by code point) are the letters. */
+  text: string;
+  /** Raster size in pixels. */
+  w: number;
+  h: number;
+  /** Pixels per x-height (always `S`). */
+  S: number;
+  /** v (x-heights, baseline 0, up negative) of the raster's top row. */
+  vTop: number;
+  /** Baseline row. */
+  Yb: number;
+  /** u (x-heights) of raster column 0, before shear. */
+  uMin: number;
+  /** Where each character starts along the line, in raster columns (one extra at the end). */
+  bounds: number[];
+  /** Font proportions (x-heights) and x-height as a fraction of the font size. */
+  asc: number;
+  desc: number;
+  xRatio: number;
+  /** Model slant, degrees right of vertical. */
+  slant: number;
+  /** Row-major, w*h: 1 where the glyph's alpha is above the threshold, else 0. */
+  ink: Uint8Array;
+}
+
+/** A model raster with its skeleton, ready to score against. */
 interface ModelRender {
+  raster: ModelRaster;
   model: Raster;
   skel: Raster;
   W: number;
@@ -79,21 +118,23 @@ interface ModelRender {
   uMin: number;
   vTop: number;
   tan: number;
-  /** Where each character starts along the line, in analysis columns (one extra at the end). */
   bounds: number[];
   chars: string[];
 }
+
+/** The slant's tangent, as the shear applied to the model. */
+const tanOf = (slant: number) => Math.tan((slant * Math.PI) / 180);
 
 /**
  * Draw the model text on the shared baseline, sheared upright, `extraU`
  * x-heights wider than the text so a longer line of writing still fits.
  */
-function renderModel(
+export function renderModelRaster(
   text: string,
   font: FontInfo,
   extraU: (modelU: number, tan: number) => number,
-): ModelRender {
-  const tan = Math.tan((font.slant * Math.PI) / 180);
+): ModelRaster {
+  const tan = tanOf(font.slant);
   const vTop = -(1 + font.proportions.asc + 0.6);
   const vBottom = font.proportions.desc + 0.6;
   const H = Math.ceil((vBottom - vTop) * S);
@@ -123,23 +164,52 @@ function renderModel(
   mctx.font = fontString(font, px);
   mctx.textBaseline = "alphabetic";
   mctx.fillText(text, -uMin * S, Yb);
-  const model = raster(W, H);
+  const ink = new Uint8Array(W * H);
   const pixels = mctx.getImageData(0, 0, W, H).data;
-  for (let i = 0; i < W * H; i++) model.data[i] = pixels[i * 4 + 3] > 110 ? 1 : 0;
+  for (let i = 0; i < W * H; i++) ink[i] = pixels[i * 4 + 3] > 110 ? 1 : 0;
 
   return {
+    text,
+    w: W,
+    h: H,
+    S,
+    vTop,
+    Yb,
+    uMin,
+    bounds: starts.map((s) => -uMin * S + s),
+    asc: font.proportions.asc,
+    desc: font.proportions.desc,
+    xRatio: font.xRatio,
+    slant: font.slant,
+    ink,
+  };
+}
+
+/** Thin a model raster to its centreline and gather what scoring needs. */
+function prepare(r: ModelRaster): ModelRender {
+  const model: Raster = { w: r.w, h: r.h, data: r.ink };
+  return {
+    raster: r,
     model,
     skel: skeleton(model),
-    W,
-    H,
-    Yb,
-    Yx: Yb - S,
-    uMin,
-    vTop,
-    tan,
-    bounds: starts.map((s) => -uMin * S + s),
-    chars,
+    W: r.w,
+    H: r.h,
+    Yb: r.Yb,
+    Yx: r.Yb - S,
+    uMin: r.uMin,
+    vTop: r.vTop,
+    tan: tanOf(r.slant),
+    bounds: r.bounds,
+    chars: [...r.text],
   };
+}
+
+/** The raster `r` widened with empty columns to `w`, or `r` itself if already that wide. */
+function widened(r: ModelRaster, w: number): ModelRaster {
+  if (w <= r.w) return r;
+  const ink = new Uint8Array(w * r.h);
+  for (let y = 0; y < r.h; y++) ink.set(r.ink.subarray(y * r.w, (y + 1) * r.w), y * w);
+  return { ...r, w, ink };
 }
 
 /**
@@ -149,12 +219,29 @@ function renderModel(
 export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckResult | null {
   const points = strokes.flatMap((s) => s.points);
   if (points.length === 0 || text.trim() === "") return null;
+  return checkWithModel(
+    renderModelRaster(text, font, (_, tan) => {
+      let max = 0;
+      for (const p of points) max = Math.max(max, p.u + p.v * tan);
+      return max;
+    }),
+    strokes,
+  );
+}
 
-  const m = renderModel(text, font, (_, tan) => {
-    let max = 0;
-    for (const p of points) max = Math.max(max, p.u + p.v * tan);
-    return max;
-  });
+/**
+ * Everything after rendering: compare strokes with a rendered model. The
+ * raster is widened with empty columns if the writing runs past its right
+ * edge, as `check` would have rendered it. Returns null when there is
+ * nothing to compare (no ink, or a model with no letters).
+ */
+export function checkWithModel(raster: ModelRaster, strokes: Stroke[]): CheckResult | null {
+  const points = strokes.flatMap((s) => s.points);
+  if (points.length === 0 || raster.text.trim() === "") return null;
+  const tan0 = tanOf(raster.slant);
+  let maxU = 0;
+  for (const p of points) maxU = Math.max(maxU, p.u + p.v * tan0);
+  const m = prepare(widened(raster, Math.ceil((maxU - raster.uMin + 2) * S)));
   const { model, W, H, Yb, Yx, uMin, vTop, tan, bounds, chars } = m;
   const modelSkel = m.skel;
 
@@ -275,7 +362,13 @@ export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckRes
     // descender, say) reaches into its slot.
     if (/\s/.test(char) || modelToUser[i].length === 0) return;
     const s = scoreLetter(userToModel[i], modelToUser[i], full, zero);
-    letters.push({ char, score: s.score, missing: s.missing });
+    letters.push({
+      char,
+      score: s.score,
+      precision: s.precision,
+      coverage: s.coverage,
+      missing: s.missing,
+    });
     if (s.missing) return;
     const modelWidth = bounds[i + 1] - bounds[i];
     if (modelWidth > 0.2 * S) {
@@ -312,30 +405,35 @@ export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckRes
   // The overlay, in the user's (deslanted) frame: for each column the user
   // wrote in, the model column it was matched to, so the ghost letters sit
   // under the user's own and stretch with them.
-  const overlay = document.createElement("canvas");
-  overlay.width = W;
-  overlay.height = H;
-  const octx = overlay.getContext("2d")!;
-  const img = octx.createImageData(W, H);
-  const unwritten: Array<[number, number]> = [];
-  for (let x = Math.max(0, u0 - S); x <= Math.min(W - 1, u1 + S); x++) {
-    const mx = Math.round(toModelX(x));
-    if (mx < 0 || mx >= W) continue;
-    for (let y = 0; y < H; y++) {
-      const k = y * W + mx, o = (y * W + x) * 4;
-      if (modelSkel.data[k] && dtUser[k] > (full + zero) / 2) {
-        unwritten.push([x, y]); // a part of the letter never written
-      }
-      if (model.data[k]) {
-        img.data.set([90, 140, 220, 70], o); // the model, faint
+  let drawn: HTMLCanvasElement | null = null;
+  const makeOverlay = () => {
+    if (drawn) return drawn;
+    const overlay = document.createElement("canvas");
+    overlay.width = W;
+    overlay.height = H;
+    const octx = overlay.getContext("2d")!;
+    const img = octx.createImageData(W, H);
+    const unwritten: Array<[number, number]> = [];
+    for (let x = Math.max(0, u0 - S); x <= Math.min(W - 1, u1 + S); x++) {
+      const mx = Math.round(toModelX(x));
+      if (mx < 0 || mx >= W) continue;
+      for (let y = 0; y < H; y++) {
+        const k = y * W + mx, o = (y * W + x) * 4;
+        if (modelSkel.data[k] && dtUser[k] > (full + zero) / 2) {
+          unwritten.push([x, y]); // a part of the letter never written
+        }
+        if (model.data[k]) {
+          img.data.set([90, 140, 220, 70], o); // the model, faint
+        }
       }
     }
-  }
-  octx.putImageData(img, 0, 0);
-  // Drawn after the ghost, and wider than the one-pixel centreline, so a
-  // missed part of a letter is plain to see at screen size.
-  octx.fillStyle = "rgba(200, 40, 40, 0.9)";
-  for (const [x, y] of unwritten) octx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    octx.putImageData(img, 0, 0);
+    // Drawn after the ghost, and wider than the one-pixel centreline, so a
+    // missed part of a letter is plain to see at screen size.
+    octx.fillStyle = "rgba(200, 40, 40, 0.9)";
+    for (const [x, y] of unwritten) octx.fillRect(x - 1.5, y - 1.5, 3, 3);
+    return (drawn = overlay);
+  };
 
   const shapes = letters.reduce((a, l) => a + l.score, 0) / letters.length;
   const score = Math.round(shapes * (1 - proportionPenalty(metrics)));
@@ -345,7 +443,7 @@ export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckRes
     metrics,
     notes: notes(metrics),
     pointClass,
-    overlay,
+    overlay: makeOverlay,
     frame: { uMin, vTop, tan },
   };
 }
@@ -355,7 +453,12 @@ export function check(text: string, font: FontInfo, strokes: Stroke[]): CheckRes
  * perfectly. A check of these should score near 100%.
  */
 export function modelStrokes(text: string, font: FontInfo): Stroke[] {
-  return trace(renderModel(text, font, () => 0));
+  return strokesFromModel(renderModelRaster(text, font, () => 0));
+}
+
+/** The centreline of a model raster as strokes, in x-height units. */
+export function strokesFromModel(r: ModelRaster): Stroke[] {
+  return trace(prepare(r));
 }
 
 /** Walk a rendered model's skeleton into strokes, in x-height units. */
@@ -531,7 +634,7 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, b: Band, r: CheckResu
   // Analysis (deslanted) pixels → band pixels: undo the shear, then scale.
   ctx.transform(k, 0, -tan * k, k, b.left + b.xh * (uMin - vTop * tan), b.baseline + b.xh * vTop);
   ctx.imageSmoothingEnabled = true;
-  ctx.drawImage(r.overlay, 0, 0);
+  ctx.drawImage(r.overlay(), 0, 0);
   ctx.restore();
 }
 

@@ -1,4 +1,4 @@
-.PHONY: run bundle build test vet fmt check up down fonts-fetch
+.PHONY: run bundle build test vet fmt check up down fonts-fetch fixtures
 
 ADDR ?= :8083
 
@@ -18,6 +18,10 @@ build: bundle
 test:
 	go test -count=1 ./...
 	deno task -q test
+
+## fixtures: regenerate testdata/parity (model raster + web scores) with headless Chromium; needs the network for Google fonts
+fixtures: bundle
+	deno run -A tools/export-fixtures.ts
 
 vet:
 	go vet ./...

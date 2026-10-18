@@ -220,6 +220,14 @@ model's own centreline (100%), and from altered copies:
 
 Open the worksheet with `#debug` to get these helpers in the console.
 
+**Parity fixtures.** `make fixtures` drives headless Chromium over the
+DevTools Protocol (`tools/export-fixtures.ts`) and writes
+`testdata/parity/<font>-<sheet>-<row>.json`: the model raster
+(`renderModelRaster`, run-length encoded) and the scores `checkWithModel`
+gives synthetic writings (`web/fixture.ts`). Other implementations of the
+scoring replay them; `web/fixture_test.ts` guards against drift. It needs the
+network for the Google fonts.
+
 ### Progress
 
 Every check is kept on the device, and **Progress** (in the header) shows it.

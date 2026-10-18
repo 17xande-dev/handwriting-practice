@@ -1,7 +1,8 @@
 // Entry point: wires the toolbar to the pen preview and every row on a
 // worksheet page.
 
-import { type Metrics, modelStrokes, notes } from "./evaluate.ts";
+import { type Metrics, modelStrokes, notes, renderModelRaster } from "./evaluate.ts";
+import { buildFixture } from "./fixture.ts";
 import { median } from "./evalcore.ts";
 import { familyList, loadGoogleFont, validFamilyName } from "./googlefont.ts";
 import { History } from "./history.ts";
@@ -194,7 +195,7 @@ function main() {
         modelName: modelName(),
         pen,
         score: result.score,
-        letters: result.letters,
+        letters: result.letters.map(({ char, score, missing }) => ({ char, score, missing })),
         metrics: result.metrics,
       }).catch(() => {
         // Storage unavailable (private browsing, quota): the check still shows.
@@ -313,7 +314,22 @@ function attachSheetCheck(rows: Row[]) {
   // For testing in a browser: #debug exposes a way to write a line from the
   // model's own centreline, so a check can be verified end to end.
   if (location.hash === "#debug") {
-    (globalThis as Record<string, unknown>).__italic = { rows, modelStrokes };
+    // exportFixture({ row }) returns a JSON string: the row's model raster
+    // and the scores of a set of synthetic writings (see fixture.ts), for
+    // tools/export-fixtures. It refuses until the model font has loaded.
+    const exportFixture = (opts: { row?: number } = {}) => {
+      const r = rows[opts.row ?? 0];
+      const font = r?.font;
+      if (!font) throw new Error("row not laid out");
+      if (!document.fonts.check(`${font.style} 32px ${font.family}`)) {
+        throw new Error("model font not loaded");
+      }
+      const modelId =
+        document.querySelector<HTMLInputElement>('input[name="model"]:checked')?.value ?? "";
+      const raster = renderModelRaster(r.text, font, () => 0);
+      return JSON.stringify(buildFixture(raster, modelId));
+    };
+    (globalThis as Record<string, unknown>).__italic = { rows, modelStrokes, exportFixture };
   }
 }
 
