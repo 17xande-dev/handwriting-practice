@@ -65,8 +65,9 @@ function main() {
     if (fingers === 2) history.undo();
     else if (fingers === 3) history.redo();
   });
+  const erasing = attachEraser();
   const rows = [...rowsEl.querySelectorAll<HTMLElement>(".row")].map(
-    (el) => new Row(el, () => toolbar.read(), theme, history),
+    (el) => new Row(el, () => toolbar.read(), theme, history, erasing),
   );
 
   const preview = document.getElementById("pen-preview");
@@ -204,6 +205,30 @@ function main() {
       });
     };
   }
+}
+
+/**
+ * The toolbar's Eraser toggle (and the E key). Not part of the remembered
+ * settings: the page always opens ready to write. Returns whether erasing is on.
+ */
+function attachEraser(): () => boolean {
+  const button = document.getElementById("eraser");
+  let on = false;
+  if (!(button instanceof HTMLButtonElement)) return () => false;
+  const set = (v: boolean) => {
+    on = v;
+    button.setAttribute("aria-pressed", String(on));
+    document.documentElement.classList.toggle("erasing", on);
+  };
+  button.addEventListener("click", () => set(!on));
+  document.addEventListener("keydown", (e) => {
+    const t = e.target;
+    if (t instanceof Element && t.closest("input[type=text], textarea")) return;
+    if (e.key.toLowerCase() !== "e" || e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+    set(!on);
+    e.preventDefault();
+  });
+  return () => on;
 }
 
 /**

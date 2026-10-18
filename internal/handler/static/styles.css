@@ -914,6 +914,11 @@ button.primary {
 
   svg { width: 1.6rem; height: 1.6rem; }
   &:not(:disabled) { color: var(--ink); }
+  &[aria-pressed="true"] {
+    color: var(--accent);
+    background: var(--paper-sunk);
+    border-color: var(--accent);
+  }
 }
 
 /* ---- Accounts and sync ---------------------------------------------------- */

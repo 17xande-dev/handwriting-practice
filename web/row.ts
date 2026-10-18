@@ -8,6 +8,7 @@ import { drawStroke, type Point, type Stroke } from "./ink.ts";
 import { type FontInfo, fontString } from "./measure.ts";
 import type { History } from "./history.ts";
 import { attachPen, type Sample } from "./pen.ts";
+import { eraserTolerance, strokesHit, type UV } from "./eraser.ts";
 import type { Settings } from "./settings.ts";
 
 export interface Theme {
@@ -79,8 +80,18 @@ export class Row {
   #settings: () => Settings;
   #theme: Theme;
   #history: History;
+  #erasing: () => boolean;
+  /** The eraser gesture in progress: the strokes at its start and its last point. */
+  #erase: { before: Stroke[]; last: UV } | null = null;
 
-  constructor(el: HTMLElement, settings: () => Settings, theme: Theme, history: History) {
+  constructor(
+    el: HTMLElement,
+    settings: () => Settings,
+    theme: Theme,
+    history: History,
+    erasing: () => boolean = () => false,
+  ) {
+    this.#erasing = erasing;
     this.#el = el;
     this.#settings = settings;
     this.#theme = theme;
@@ -109,16 +120,40 @@ export class Row {
     attachPen(this.#practice.canvas, {
       touchWrites: () => this.#settings().touchWrites,
       start: (s) => {
+        if (this.#erasing()) {
+          const p = this.#point(s);
+          this.#erase = { before: this.#strokes, last: p };
+          this.#eraseAlong([p]);
+          return;
+        }
         this.#live = { pen: this.#settings().pen, points: [this.#point(s)] };
         this.#schedule();
       },
       move: (samples, predicted) => {
+        if (this.#erase) {
+          this.#eraseAlong(samples.map((x) => this.#point(x)));
+          return;
+        }
         if (!this.#live) return;
         for (const s of samples) this.#live.points.push(this.#point(s));
         this.#predicted = predicted.map((s) => this.#point(s));
         this.#schedule();
       },
       end: () => {
+        const gesture = this.#erase;
+        if (gesture) {
+          // One edit for the whole gesture, however many strokes it took.
+          this.#erase = null;
+          const before = gesture.before, after = this.#strokes;
+          if (after.length !== before.length) {
+            this.#history.push({
+              where: el,
+              undo: () => this.#setStrokes(before),
+              redo: () => this.#setStrokes(after),
+            });
+          }
+          return;
+        }
         const stroke = this.#live;
         if (!stroke) return;
         this.#live = null;
@@ -131,6 +166,16 @@ export class Row {
         });
       },
     });
+  }
+
+  /** Remove, live, every stroke the eraser passes over on its way through these points. */
+  #eraseAlong(points: UV[]) {
+    const g = this.#erase;
+    if (!g) return;
+    const path = [g.last, ...points];
+    g.last = path[path.length - 1];
+    const hit = new Set(strokesHit(this.#strokes, path, eraserTolerance));
+    if (hit.size) this.#setStrokes(this.#strokes.filter((_, i) => !hit.has(i)));
   }
 
   /**
