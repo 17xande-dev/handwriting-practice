@@ -6,8 +6,8 @@ import (
 	"unicode"
 )
 
-// Limits on a custom exercise. The text travels in the URL, so it is kept to
-// what a practice session plausibly uses, and well under URL length limits.
+// Limits on a custom exercise. The text is posted, never put in a URL, but it
+// is still kept to what a practice session plausibly uses.
 const (
 	MaxCustomRunes = 1200
 	MaxCustomLines = 30
