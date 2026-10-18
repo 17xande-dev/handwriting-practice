@@ -83,11 +83,14 @@ Deno.test("since keeps the last N days", () => {
 // A backup is a file the user picks: anything malformed is refused, not stored.
 Deno.test("backup records are validated", () => {
   assert(isRecord(rec(1, 50)));
+  // Pen kinds the iPad adds later are stored, not refused.
+  for (const pen of ["edged", "pointed", "pencil"]) assert(isRecord({ ...rec(1, 50), pen }), pen);
   for (
     const bad of [
       null,
       { ...rec(1, 50), score: 101 },
-      { ...rec(1, 50), pen: "brush" },
+      { ...rec(1, 50), pen: "" },
+      { ...rec(1, 50), pen: 3 },
       { ...rec(1, 50), line: "x".repeat(500) },
       { ...rec(1, 50), letters: [{ char: "a", score: "high", missing: false }] },
       { ...rec(1, 50), at: "yesterday" },

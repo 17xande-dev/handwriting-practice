@@ -1,6 +1,6 @@
 # Sync API
 
-How the web app and the iPad app sync checked lines (and, later, the ink of each attempt) through the
+How the web app and the iPad app sync checked lines (and the ink of each attempt) through the
 server. The server side lives in `internal/handler/api.go` (HTTP) and `internal/history` (storage);
 the web client is `web/sync.ts` and `web/progress-store.ts`. Both clients follow the algorithm at the
 end of this page. It is the same contract as music-practice's, with different record kinds.
@@ -120,28 +120,21 @@ Unknown extra fields must be carried untouched.
 
 ### `ink`
 
-The strokes of one checked attempt, so a check can be shown with what was written. **The web does not
-write these yet** (W2 will); the server, the store and `sync.ts` already carry them, and they are
-limited to 64 KB like every record. Beyond `id`, `ts` and size nothing is checked, so the shape below
-is the agreed starting point for W2 and the iPad, and may be refined by whoever writes the first one
-(update this page when they do):
+The packed strokes of one checked attempt, so a check can be shown again and replayed. One ink record
+per recorded check: `id` is `"<checkId>-ink"` (so a check id over 60 bytes gets none), `ts` is the
+check's `at`, at most 64 KB (the writer targets 60,000 bytes and drops points until it fits). The web
+writes them (`web/ink-codec.ts`); the byte layout, quantisation, deltas against the reconstructed
+previous point, decimation and decoding rules are the iPad repo's `docs/metrics.md` ("Ink record"),
+pinned by the golden vectors in `testdata/metrics/ink.json` and `ink-decode.json`:
 
 ```json
-{
-  "id": "0b8e3f0e-5f0b-4d77-a7d1-0a9f6d4a2c10",
-  "ts": 1760000000000,
-  "check": "6f2c0a54-9b1e-4c1a-8f0d-2f1d6b6f4a11",
-  "pen": "monoline",
-  "strokes": [[[12, 40, 35, 0], [14, 52, 41, 8]]]
-}
+{"id":"<checkId>-ink","ts":1760000000000,"check":"<checkId>","v":1,
+ "pen":{"kind":"monoline","weight":3,"input":"pencil"},"xh":36.4,"dec":1,
+ "strokes":[{"fr":false,"rr":null,"t0":0,"o":[99,-962],"d":"<base64, 10 bytes per point>"}]}
 ```
 
-- `check` is the `id` of the check these strokes belong to. `ts` is that check's `at`.
-- `strokes` is a list of strokes; a stroke is a list of points `[u, v, p, t]`, all integers:
-  `u`, `v` in hundredths of an x-height (the web's stroke units, relative to the baseline, so ink
-  rescales); `p` pressure 0-100; `t` milliseconds since the stroke's first point.
-- A line's ink that would exceed 64 KB must be simplified (drop points) before it is stored, not sent
-  and rejected.
+A check record may also carry `metrics2` and `pen2` (same document); readers that do not know them
+ignore them, and a `pen` of any non-empty string is accepted (the iPad adds "pointed" and "pencil").
 
 ## Authentication
 

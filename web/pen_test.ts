@@ -1,7 +1,7 @@
 /// <reference lib="deno.ns" />
 
-import { assertEquals } from "@std/assert";
-import { TapTracker } from "./pen.ts";
+import { assert, assertEquals } from "@std/assert";
+import { rollOfTwist, TapTracker } from "./pen.ts";
 
 /** Fingers landing at `downs` ms, lifting at `ups` ms, moving `move` px. */
 function gesture(downs: number[], ups: number[], move = 0, penAt?: number): number {
@@ -38,4 +38,15 @@ Deno.test("a cancelled finger spoils the tap", () => {
   t.down(2, 50, 0, 10);
   assertEquals(t.up(1, 100, true), 0);
   assertEquals(t.up(2, 110), 0);
+});
+
+Deno.test("twist degrees become the iPad's roll in [-PI, PI)", () => {
+  assertEquals(rollOfTwist(0), 0);
+  assertEquals(rollOfTwist(180), -Math.PI);
+  assert(Math.abs(rollOfTwist(90) - Math.PI / 2) < 1e-12);
+  assert(Math.abs(rollOfTwist(270) + Math.PI / 2) < 1e-12);
+  for (const d of [0, 1, 179, 181, 359]) {
+    const r = rollOfTwist(d);
+    assert(r >= -Math.PI && r < Math.PI, String(d));
+  }
 });

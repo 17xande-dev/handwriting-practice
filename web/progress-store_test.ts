@@ -173,3 +173,16 @@ Deno.test("ids count UTF-8 bytes, and a record needs a positive at", () => {
   // A 66-byte id is not kept: the record gets its derived one instead.
   assertEquals(identify(line(5, { id: "é".repeat(33) })).id, legacyId(line(5)));
 });
+
+Deno.test("a check with metrics2 and pen2 is accepted and carried untouched", () => {
+  const extra = {
+    metrics2: { v: 1, scores: { shape: 80, consistency: 70 }, notes: [] },
+    pen2: { kind: "edged", nibs: 5, angle: 45, followsRoll: true, input: "pencil" },
+  };
+  const r = line(1000, { ...extra, pen: "pointed" });
+  assert(isRecord(r));
+  const got = identify(r);
+  assertEquals(got.metrics2, extra.metrics2);
+  assertEquals(got.pen2, extra.pen2);
+  assertEquals(got.pen, "pointed");
+});

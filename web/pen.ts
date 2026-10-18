@@ -28,6 +28,10 @@ export interface Sample {
   t: number;
   alt?: number;
   az?: number;
+  /** Barrel roll in radians in [-PI, PI), when the browser reports a twist. */
+  roll?: number;
+  /** The stylus's own pressure, only for a pen (so "a Pencil, not a finger"). */
+  force?: number;
 }
 
 export interface PenHandlers {
@@ -38,6 +42,19 @@ export interface PenHandlers {
   move(samples: Sample[], predicted: Sample[]): void;
   end(): void;
 }
+
+/** PointerEvent.twist (0-359 degrees clockwise) as the iPad's `roll`: radians in [-PI, PI). */
+export function rollOfTwist(twistDegrees: number): number {
+  const turn = 2 * Math.PI;
+  const r = ((twistDegrees * Math.PI / 180 + Math.PI) % turn + turn) % turn - Math.PI;
+  return r;
+}
+
+/**
+ * Twist is 0 on a stylus without barrel-roll hardware, so, as on the iPad, a roll only counts
+ * once a nonzero twist has been seen; from then on every pen sample carries one.
+ */
+let twistSeen = false;
 
 function sample(e: PointerEvent, rect: DOMRect): Sample {
   const s: Sample = {
@@ -51,6 +68,13 @@ function sample(e: PointerEvent, rect: DOMRect): Sample {
   const angles = e as PointerEvent & { altitudeAngle?: number; azimuthAngle?: number };
   if (typeof angles.altitudeAngle === "number") s.alt = angles.altitudeAngle;
   if (typeof angles.azimuthAngle === "number") s.az = angles.azimuthAngle;
+  if (e.pointerType === "pen") {
+    s.force = e.pressure;
+    if (typeof e.twist === "number") {
+      if (e.twist !== 0) twistSeen = true;
+      if (twistSeen) s.roll = rollOfTwist(e.twist);
+    }
+  }
   return s;
 }
 

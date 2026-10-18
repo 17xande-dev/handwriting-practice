@@ -22,11 +22,73 @@ export interface CheckRecord {
   /** Model font id and its real name. */
   model: string;
   modelName: string;
-  pen: "monoline" | "edged";
+  /**
+   * "monoline" or "edged" today; any non-empty string is accepted, since the
+   * iPad app is adding pen kinds ("pointed", "pencil") that this app only stores.
+   */
+  pen: string;
   /** 0–100, as shown on the line. */
   score: number;
   letters: Array<{ char: string; score: number; missing: boolean }>;
   metrics: { slantDiff: number; size: number; width: number; baseline: number };
+  /**
+   * M5 extras (the iPad repo's docs/metrics.md). Optional members are omitted
+   * when absent; every number may be null (NaN) or missing. A reader treats a
+   * malformed value as absent; this store carries both untouched.
+   */
+  metrics2?: Metrics2;
+  pen2?: Pen2Record;
+}
+
+/** The `pen2` member: the pen's details and what drove it. */
+export interface Pen2Record {
+  kind: string;
+  weight?: number;
+  nibs?: number;
+  angle?: number;
+  followsRoll?: boolean;
+  /** "pencil" or "touch". */
+  input: string;
+}
+
+type Nums<K extends string> = { [P in K]?: number | null };
+
+/** The `metrics2` member of a check record. */
+export interface Metrics2 {
+  v: number;
+  shape?: {
+    letters?: Array<{ char: string; precision?: number | null; coverage?: number | null }>;
+    zone?: Nums<"ascender" | "body" | "descender">;
+    worst?: { stroke: number; from: number; to: number; letter: number; mean?: number | null };
+  };
+  consistency?: Nums<
+    "slantSD" | "sizeSD" | "baselineSD" | "spacingDevSD" | "spacingCV" | "wordSpace" | "repeatDist"
+  >;
+  pen?: Nums<
+    | "pressureMean"
+    | "pressureCV"
+    | "pressureContrast"
+    | "nibMean"
+    | "nibTarget"
+    | "nibDev"
+    | "nibSD"
+    | "altMean"
+    | "altSD"
+    | "azimuthSD"
+  >;
+  fluency?: Nums<
+    | "speedMedian"
+    | "speedCV"
+    | "hesitations"
+    | "pauses"
+    | "slowRuns"
+    | "liftsPerLetter"
+    | "modelLiftsPerLetter"
+    | "lettersPerMinute"
+    | "activeMs"
+  >;
+  scores?: { shape?: number; consistency?: number; pen?: number; fluency?: number };
+  notes?: string[];
 }
 
 /** What a caller records: the identity is assigned by the store. */
@@ -39,10 +101,9 @@ export type NewCheck = Omit<CheckRecord, "id" | "ts">;
 export type LooseCheck = NewCheck & { id?: string; ts?: number };
 
 /**
- * The quantized strokes of one checked attempt. The web does not write these
- * yet; the store and the sync loop already carry them. Beyond the identity,
- * the server and this store look at nothing, so the shape belongs to
- * whoever writes them (docs/sync-api.md describes the agreed one).
+ * The packed strokes of one checked attempt (see ink-codec.ts for the
+ * layout, docs/sync-api.md for the contract). Beyond the identity, the server
+ * and this store look at nothing.
  */
 export interface InkRecord {
   id: string;
@@ -79,6 +140,10 @@ export interface ProgressStore {
   merge(rs: LooseCheck[]): Promise<number>;
   /** Delete every check and ink record, queuing their deletion while sync is on. */
   clear(): Promise<void>;
+  /** The writing on a sheet row, kept on this device (never synced) so it survives a reload. */
+  loadStrokes(key: string): Promise<unknown>;
+  /** Keep (or, with null, forget) the writing of a row. */
+  saveStrokes(key: string, strokes: unknown | null): Promise<void>;
   /** Store the ink of a checked attempt. */
   addInk(r: InkRecord): Promise<void>;
   allInk(): Promise<InkRecord[]>;
@@ -205,7 +270,7 @@ export function isRecord(x: unknown): x is LooseCheck {
     (r.ts === undefined || num(r.ts)) &&
     num(r.at) && (r.at as number) > 0 && str(r.sheet, 64) && str(r.sheetTitle, 200) &&
     str(r.line, 200) &&
-    str(r.model, 64) && str(r.modelName, 200) && (r.pen === "monoline" || r.pen === "edged") &&
+    str(r.model, 64) && str(r.modelName, 200) && str(r.pen, 32) && (r.pen as string).length > 0 &&
     num(r.score) && (r.score as number) >= 0 && (r.score as number) <= 100 &&
     Array.isArray(r.letters) && r.letters.length <= 200 &&
     r.letters.every((l) =>
@@ -311,11 +376,15 @@ export function freshSyncState(email: string): SyncState {
 
 const dbName = "italic-practice";
 // Version 2 adds the id index on checks, the ink and meta stores, and gives
-// every existing check its identity.
-const dbVersion = 2;
+// every existing check its identity. Version 3 adds the store of what is
+// written on each sheet row.
+const dbVersion = 3;
 const checks = "checks";
 const ink = "ink";
 const meta = "meta";
+const writing = "writing";
+/** Rows of writing kept on this device; the least recently written go first. */
+export const maxWritingRows = 300;
 const syncKey = "sync";
 
 function open(): Promise<IDBDatabase> {
@@ -348,6 +417,7 @@ function open(): Promise<IDBDatabase> {
           cur.continue();
         };
       }
+      if (ev.oldVersion < 3) db.createObjectStore(writing);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -437,6 +507,36 @@ export class DeviceStore implements ProgressStore, SyncStore {
       tx.objectStore(ink).clear();
       changeSync(tx, (s) => queueDeletes(s, gone));
     };
+    await done(tx);
+  }
+
+  async loadStrokes(key: string): Promise<unknown> {
+    const tx = (await this.#open()).transaction(writing, "readonly");
+    const req = tx.objectStore(writing).get(key);
+    await done(tx);
+    return (req.result as { strokes?: unknown } | undefined)?.strokes ?? null;
+  }
+
+  async saveStrokes(key: string, strokes: unknown | null): Promise<void> {
+    const tx = (await this.#open()).transaction(writing, "readwrite");
+    const s = tx.objectStore(writing);
+    if (strokes === null) {
+      s.delete(key);
+    } else {
+      s.put({ at: Date.now(), strokes }, key);
+      // Keep the store bounded: forget the rows written longest ago.
+      const all: Array<[IDBValidKey, number]> = [];
+      s.openCursor().onsuccess = (e) => {
+        const cur = (e.target as IDBRequest<IDBCursorWithValue | null>).result;
+        if (cur) {
+          all.push([cur.key, (cur.value as { at?: number }).at ?? 0]);
+          cur.continue();
+          return;
+        }
+        all.sort((x, y) => x[1] - y[1]);
+        for (const [k] of all.slice(0, Math.max(0, all.length - maxWritingRows))) s.delete(k);
+      };
+    }
     await done(tx);
   }
 
