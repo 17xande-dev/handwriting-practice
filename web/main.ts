@@ -2,7 +2,6 @@
 // worksheet page.
 
 import { type Metrics, modelStrokes, notes, renderModelRaster } from "./evaluate.ts";
-import { buildFixture } from "./fixture.ts";
 import { median } from "./evalcore.ts";
 import { familyList, loadGoogleFont, validFamilyName } from "./googlefont.ts";
 import { History } from "./history.ts";
@@ -317,10 +316,16 @@ function attachSheetCheck(rows: Row[]) {
   // For testing in a browser: #debug exposes a way to write a line from the
   // model's own centreline, so a check can be verified end to end.
   if (location.hash === "#debug") {
-    // exportFixture({ row }) returns a JSON string: the row's model raster
+    // exportFixture({ row }) resolves to a JSON string: the row's model raster
     // and the scores of a set of synthetic writings (see fixture.ts), for
     // tools/export-fixtures. It refuses until the model font has loaded.
-    const exportFixture = (opts: { row?: number } = {}) => {
+    // The synthetic writings live in their own bundle (web/debug.ts, served
+    // as /static/debug.js) and are fetched here, only under #debug, so the
+    // production bundle does not carry them. The specifier is a variable so
+    // the bundler leaves it alone instead of following it.
+    const exportFixture = async (opts: { row?: number } = {}) => {
+      const url = "/static/debug.js";
+      const { buildFixture } = await import(url) as typeof import("./debug.ts");
       const r = rows[opts.row ?? 0];
       const font = r?.font;
       if (!font) throw new Error("row not laid out");

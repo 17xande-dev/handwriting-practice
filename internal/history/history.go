@@ -12,11 +12,13 @@
 package history
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 )
 
 // Kinds are the two records the apps keep: a checked line, and the
@@ -50,37 +52,82 @@ type Store struct {
 
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
+// MaxIDBytes is the longest record id, in bytes of UTF-8.
+const MaxIDBytes = 64
+
+// topLevel reads a JSON object's members in order, keeping each name exactly
+// as written. Go's own struct decoding would match "ID" to a field called
+// "id" and let the last duplicate win, which is a different reading from the
+// iPad's; reading the members ourselves lets CheckRecord refuse the ambiguity.
+func topLevel(raw json.RawMessage) (names []string, values map[string]json.RawMessage, err error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, nil, fmt.Errorf("not a JSON object")
+	}
+	values = map[string]json.RawMessage{}
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return nil, nil, fmt.Errorf("not a JSON object")
+		}
+		name, _ := t.(string)
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, nil, fmt.Errorf("not a JSON object")
+		}
+		names = append(names, name)
+		values[name] = v
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, nil, fmt.Errorf("not a JSON object")
+	}
+	return names, values, nil
+}
+
 // CheckRecord reports why raw cannot be stored as a record of kind, or nil, and
 // returns the record's id. The server checks only what syncing relies on: an
-// object with a string id (1-64 characters) and a positive numeric ts. The
-// rest of the shape belongs to the apps, which validate every record they
-// read anyway.
+// object with a string id (1-64 bytes of UTF-8) and a positive numeric ts, no
+// two top-level names that differ only in case, and a size. The rest of the
+// shape belongs to the apps, which validate every record they read anyway.
+//
+// Whenever the record has a string "id", it is returned alongside the error,
+// whatever the reason for refusing it, so the client can match the rejection
+// to its queue and stop resending the record.
 func CheckRecord(kind string, raw json.RawMessage) (string, error) {
 	if !validKind(kind) {
 		return "", fmt.Errorf("unknown kind %q", kind)
 	}
-	var head struct {
-		ID *string  `json:"id"`
-		TS *float64 `json:"ts"`
+	names, values, err := topLevel(raw)
+	if err != nil {
+		return "", err
 	}
-	if raw == nil || raw[0] != '{' || json.Unmarshal(raw, &head) != nil {
-		return "", fmt.Errorf("not a JSON object")
-	}
-	// An oversized record still reports its id, so the client can match the
-	// rejection to its queue and stop resending it.
-	if len(raw) > MaxRecordBytes {
-		if head.ID != nil && len(*head.ID) >= 1 && len(*head.ID) <= 64 {
-			return *head.ID, fmt.Errorf("record over %d bytes", MaxRecordBytes)
+	var id string
+	hasID := json.Unmarshal(values["id"], &id) == nil && values["id"] != nil && values["id"][0] == '"'
+	reject := func(format string, a ...any) (string, error) {
+		if hasID {
+			return id, fmt.Errorf(format, a...)
 		}
-		return "", fmt.Errorf("record over %d bytes", MaxRecordBytes)
+		return "", fmt.Errorf(format, a...)
 	}
-	if head.ID == nil || len(*head.ID) == 0 || len(*head.ID) > 64 {
-		return "", fmt.Errorf("id must be a string of 1-64 characters")
+	if len(raw) > MaxRecordBytes {
+		return reject("record over %d bytes", MaxRecordBytes)
 	}
-	if head.TS == nil || !(*head.TS > 0) || math.IsInf(*head.TS, 0) {
-		return "", fmt.Errorf("ts must be a positive number")
+	seen := make(map[string]string, len(names))
+	for _, n := range names {
+		folded := strings.ToLower(n)
+		if prev, dup := seen[folded]; dup {
+			return reject("duplicate top-level field: %q and %q differ at most in case", prev, n)
+		}
+		seen[folded] = n
 	}
-	return *head.ID, nil
+	if !hasID || len(id) == 0 || len(id) > MaxIDBytes {
+		return reject("id must be a string of 1-%d bytes", MaxIDBytes)
+	}
+	var ts float64
+	if v := values["ts"]; v == nil || json.Unmarshal(v, &ts) != nil || !(ts > 0) || math.IsInf(ts, 0) {
+		return reject("ts must be a positive number")
+	}
+	return id, nil
 }
 
 // Push stores new records and deletions in one transaction, so a failed sync
@@ -112,7 +159,7 @@ func (s *Store) Push(ctx context.Context, userID int64, records []Record, delete
 	// updating it, so it takes a new, higher seq and every device's next
 	// pull sees it. An id already tombstoned is left alone.
 	for _, d := range deleted {
-		if !validKind(d.Kind) || len(d.ID) == 0 || len(d.ID) > 64 {
+		if !validKind(d.Kind) || len(d.ID) == 0 || len(d.ID) > MaxIDBytes {
 			continue
 		}
 		res, err := tx.ExecContext(ctx, `DELETE FROM records WHERE user_id = ? AND kind = ? AND id = ? AND data IS NOT NULL`,
@@ -139,9 +186,11 @@ func (s *Store) Push(ctx context.Context, userID int64, records []Record, delete
 	return tx.Commit()
 }
 
-// Pull returns up to limit changes after cursor, oldest first, the cursor
-// to ask from next time, and whether more are waiting.
-func (s *Store) Pull(ctx context.Context, userID, cursor int64, limit int) ([]Record, int64, bool, error) {
+// Pull returns up to limit changes after cursor, oldest first, whose data
+// adds up to at most maxBytes (a tombstone counts for its id and a little
+// framing), the cursor to ask from next time, and whether more are waiting.
+// A page always holds at least one change, so a client can always advance.
+func (s *Store) Pull(ctx context.Context, userID, cursor int64, limit, maxBytes int) ([]Record, int64, bool, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT seq, kind, id, data FROM records
 		WHERE user_id = ? AND seq > ? ORDER BY seq LIMIT ?`, userID, cursor, limit+1)
 	if err != nil {
@@ -151,6 +200,7 @@ func (s *Store) Pull(ctx context.Context, userID, cursor int64, limit int) ([]Re
 	var out []Record
 	next := cursor
 	more := false
+	used := 0
 	for rows.Next() {
 		if len(out) == limit {
 			more = true
@@ -162,9 +212,16 @@ func (s *Store) Pull(ctx context.Context, userID, cursor int64, limit int) ([]Re
 		if err := rows.Scan(&seq, &r.Kind, &r.ID, &data); err != nil {
 			return nil, cursor, false, err
 		}
+		size := 64 + len(r.ID)
 		if data.Valid {
 			r.Data = json.RawMessage(data.String)
+			size = len(data.String)
 		}
+		if len(out) > 0 && used+size > maxBytes {
+			more = true
+			break
+		}
+		used += size
 		out = append(out, r)
 		next = seq
 	}

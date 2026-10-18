@@ -449,6 +449,11 @@ function attachSync(store: DeviceStore, reload: () => Promise<void>): Syncer {
         ui.status.textContent = "Signed out — sign in again to sync.";
         ui.status.classList.add("error");
       }
+      if (r.status === "account-mismatch") {
+        ui.status.textContent =
+          "This browser is signed in to a different account than it was syncing with, so sync was reset here. Reload to sync with the current account.";
+        ui.status.classList.add("error");
+      }
       if (r.status === "ok" && r.changed) await reload();
       state = await store.syncState();
       render();

@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHashRoundTrip(t *testing.T) {
@@ -90,5 +92,38 @@ func TestProductionParameters(t *testing.T) {
 	h, _ := HashPassword("whatever password")
 	if !strings.Contains(h, "$m=65536,t=3,p=2$") {
 		t.Errorf("hash parameters changed: %s", h)
+	}
+}
+
+// The slots are process-wide: with all of them taken, a further hash waits
+// briefly and then fails with ErrBusy instead of allocating another 64 MiB.
+func TestConcurrencyCap(t *testing.T) {
+	h, err := HashPassword("whatever password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := acquireWait
+	acquireWait = 20 * time.Millisecond
+	defer func() { acquireWait = old }()
+	for range maxConcurrent {
+		if err := acquire(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := VerifyPassword("whatever password", h); !errors.Is(err, ErrBusy) {
+		t.Errorf("verify with no free slot: %v", err)
+	}
+	if _, err := HashPassword("whatever password"); !errors.Is(err, ErrBusy) {
+		t.Errorf("hash with no free slot: %v", err)
+	}
+	if err := SpendVerifyTime("x"); !errors.Is(err, ErrBusy) {
+		t.Errorf("spend with no free slot: %v", err)
+	}
+	release()
+	if ok, err := VerifyPassword("whatever password", h); !ok || err != nil {
+		t.Errorf("after a slot frees: %v %v", ok, err)
+	}
+	for range maxConcurrent - 1 {
+		release()
 	}
 }

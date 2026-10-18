@@ -15,10 +15,14 @@ services:
       HSTS: "${HSTS:-0}"
       # Behind a reverse proxy every connection comes from the proxy, so the
       # per-IP sign-in limit would be one bucket shared by everyone. Name the
-      # header your proxy sets (X-Forwarded-For, X-Real-IP, CF-Connecting-IP).
+      # header your proxy sets. Prefer a single-value one the proxy overwrites
+      # (CF-Connecting-IP, X-Real-IP); for X-Forwarded-For only its rightmost
+      # entry, the one your own proxy appended, is used.
       # Empty (the default) uses the connection's own address. Only set it when
       # every request really arrives through that proxy.
       CLIENT_IP_HEADER: "${CLIENT_IP_HEADER:-}"
+    # argon2id holds 64 MiB per sign-in, at most three at a time.
+    mem_limit: 512m
     volumes:
       - data:/data
     healthcheck:

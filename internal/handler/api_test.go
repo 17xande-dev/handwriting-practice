@@ -165,11 +165,19 @@ func TestSyncPaginates(t *testing.T) {
 	s := newAccountServer(t)
 	s.addUser(t, "a@x.com", false)
 	token := s.deviceToken(t, "a@x.com", testPassword)
-	var runs []string
-	for i := range pullLimit + 5 {
-		runs = append(runs, runJSON(fmt.Sprint("r", i)))
+	// A push is capped at maxPush records, so build the history in two requests.
+	push := func(from, to int) {
+		var runs []string
+		for i := from; i < to; i++ {
+			runs = append(runs, runJSON(fmt.Sprint("r", i)))
+		}
+		if res := s.sync(t, `{"cursor":0,"push":{"check":[`+strings.Join(runs, ",")+`]}}`, token, ""); len(res.Rejected) != 0 {
+			t.Fatalf("rejected %+v", res.Rejected)
+		}
 	}
-	first := s.sync(t, `{"cursor":0,"push":{"check":[`+strings.Join(runs, ",")+`]}}`, token, "")
+	push(0, 500)
+	push(500, pullLimit+5)
+	first := s.sync(t, `{"cursor":0}`, token, "")
 	if !first.More || len(first.Records["check"]) != pullLimit {
 		t.Fatalf("first page: %d more=%v", len(first.Records["check"]), first.More)
 	}
@@ -304,5 +312,121 @@ func TestSyncInkRecordSizeLimit(t *testing.T) {
 	res := s.sync(t, `{"cursor":0,"push":{"ink":[`+ink("small", 60<<10)+`,`+ink("big", 65<<10)+`]}}`, token, "")
 	if len(res.Records["ink"]) != 1 || len(res.Rejected) != 1 || res.Rejected[0].Kind != "ink" || res.Rejected[0].ID != "big" {
 		t.Fatalf("records %d, rejected %+v", len(res.Records["ink"]), res.Rejected)
+	}
+}
+
+func TestSyncAccountMismatch(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "a@x.com", false)
+	s.addUser(t, "b@x.com", false)
+	cookie := s.signIn(t, "b@x.com", testPassword)
+	// A browser whose cookie is b's, syncing as a: nothing may be stored or returned.
+	rec := s.api(t, "POST", "/api/sync", `{"account":"a@x.com","cursor":0,"push":{"check":[`+runJSON("mine")+`]}}`, "", cookie)
+	if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"error":"account mismatch"}` {
+		t.Fatalf("mismatch: %d %s", rec.Code, rec.Body)
+	}
+	if got := s.sync(t, `{"cursor":0}`, "", cookie); len(got.Records["check"]) != 0 {
+		t.Error("a mismatched push was stored under the session's account")
+	}
+	// The right account, in any case or padding, and an omitted field, both work.
+	for _, body := range []string{`{"account":"b@x.com","cursor":0}`, `{"account":" B@X.com ","cursor":0}`, `{"cursor":0}`} {
+		if rec := s.api(t, "POST", "/api/sync", body, "", cookie); rec.Code != http.StatusOK {
+			t.Errorf("%s: %d", body, rec.Code)
+		}
+	}
+	// Junk is a mismatch, not a pass.
+	if rec := s.api(t, "POST", "/api/sync", `{"account":"not an email","cursor":0}`, "", cookie); rec.Code != http.StatusConflict {
+		t.Errorf("junk account: %d", rec.Code)
+	}
+}
+
+func TestSyncRejectedRecordsCarryTheirID(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "a@x.com", false)
+	token := s.deviceToken(t, "a@x.com", testPassword)
+	res := s.sync(t, `{"cursor":0,"push":{"check":[
+		{"id":"no-ts"},
+		{"id":"clash","ts":1,"ID":"x"},
+		{"id":"zero","ts":0},
+		{"id":"`+strings.Repeat("a", 70)+`","ts":1}]}}`, token, "")
+	got := map[string]string{}
+	for _, r := range res.Rejected {
+		got[r.ID] = r.Reason
+	}
+	for _, id := range []string{"no-ts", "clash", "zero", strings.Repeat("a", 70)} {
+		if got[id] == "" {
+			t.Errorf("rejection for %.10q lacks its id: %+v", id, res.Rejected)
+		}
+	}
+}
+
+func TestSyncPushCaps(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "a@x.com", false)
+	token := s.deviceToken(t, "a@x.com", testPassword)
+	recs := func(n int) string {
+		var r []string
+		for i := range n {
+			r = append(r, runJSON(fmt.Sprint("c", i)))
+		}
+		return strings.Join(r, ",")
+	}
+	// 600 + 401 across two kinds is over 1000 in total.
+	over := `{"push":{"check":[` + recs(600) + `],"ink":[` + strings.ReplaceAll(recs(401), `"c`, `"i`) + `]}}`
+	if rec := s.api(t, "POST", "/api/sync", over, token, ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("1001 records: %d", rec.Code)
+	}
+	var dels []string
+	for i := range 1001 {
+		dels = append(dels, fmt.Sprintf(`{"kind":"check","id":"d%d"}`, i))
+	}
+	if rec := s.api(t, "POST", "/api/sync", `{"deleted":[`+strings.Join(dels, ",")+`]}`, token, ""); rec.Code != http.StatusBadRequest {
+		t.Errorf("1001 deletions: %d", rec.Code)
+	}
+	// Exactly 1000 of each is fine.
+	ok := `{"push":{"check":[` + recs(1000) + `]},"deleted":[` + strings.Join(dels[:1000], ",") + `]}`
+	if rec := s.api(t, "POST", "/api/sync", ok, token, ""); rec.Code != http.StatusOK {
+		t.Errorf("1000 and 1000: %d %.100s", rec.Code, rec.Body)
+	}
+	// And nothing from the refused requests was stored.
+	got := s.sync(t, `{"cursor":0}`, token, "")
+	if len(got.Records["ink"]) != 0 {
+		t.Errorf("a refused push stored %d ink records", len(got.Records["ink"]))
+	}
+}
+
+// A response is capped by bytes as well as by records, and says so with more.
+func TestSyncPullPagesByBytes(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "a@x.com", false)
+	token := s.deviceToken(t, "a@x.com", testPassword)
+	pad := strings.Repeat("x", 50<<10)
+	var runs []string
+	for i := range 100 { // ~5 MB of data
+		runs = append(runs, fmt.Sprintf(`{"id":"r%d","ts":1,"pad":%q}`, i, pad))
+	}
+	for i := 0; i < 100; i += 50 {
+		if res := s.sync(t, `{"push":{"check":[`+strings.Join(runs[i:i+50], ",")+`]}}`, token, ""); len(res.Rejected) != 0 {
+			t.Fatalf("rejected %+v", res.Rejected)
+		}
+	}
+	first := s.sync(t, `{"cursor":0}`, token, "")
+	if !first.More || len(first.Records["check"]) >= 100 || len(first.Records["check"]) < 50 {
+		t.Fatalf("first page: %d records, more=%v", len(first.Records["check"]), first.More)
+	}
+	n := 0
+	for _, r := range first.Records["check"] {
+		n += len(r)
+	}
+	if n > pullBytes {
+		t.Errorf("page carries %d bytes of data, cap is %d", n, pullBytes)
+	}
+	cursor, total := first.Cursor, len(first.Records["check"])
+	for more := true; more; {
+		res := s.sync(t, fmt.Sprintf(`{"cursor":%d}`, cursor), token, "")
+		cursor, total, more = res.Cursor, total+len(res.Records["check"]), res.More
+	}
+	if total != 100 {
+		t.Errorf("paged through %d of 100 records", total)
 	}
 }

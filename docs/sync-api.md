@@ -27,11 +27,16 @@ end of this page. It is the same contract as music-practice's, with different re
 
 ## Record identity (web and iPad must agree)
 
-Every record has `id` (a string of 1-64 characters, opaque to everyone except where stated here) and
-`ts` (a positive number). The server checks nothing else about a record except its size.
+Every record has `id` (a string of 1-64 **bytes of UTF-8**, opaque to everyone except where stated
+here: count `s.utf8.count` in Swift, not characters or UTF-16 units) and `ts` (a number greater than 0).
+The member names are exactly `id` and `ts`, lower case. The server checks nothing else about a record
+except its size and that no two of its top-level member names are equal when compared case-insensitively
+(`"id"` and `"ID"`, or a repeated name).
 
 - **`ts` is `at`.** For a check, `ts` equals the record's `at`, the time the line was checked
-  (milliseconds since the epoch). It is never the time of the add or the upload. An `ink` record's
+  (milliseconds since the epoch), which must be greater than 0 (the server refuses a non-positive
+  `ts`, so a client must not make or accept a check whose `at` is not). It is never the time of the add
+  or the upload. An `ink` record's
   `ts` is the `at` of the check it belongs to.
 - **A record with an `id` keeps it.** Whenever it is loaded, imported or uploaded.
 - **A new record gets a random UUID** (lowercase, v4). The web falls back to building a v4 UUID from
@@ -168,8 +173,14 @@ All bodies are JSON. Errors are `{"error": "message"}` with a 4xx/5xx status. Ev
   the account page's device list shows (100 characters at most).
 - `401` for every failure: unknown email, wrong password or disabled account. The message is always
   the same.
-- `429` when rate-limited: 5 attempts per email, then one a minute, plus a per-IP ceiling. Shared with
-  the web sign-in form.
+- `400` when `email` is not a bare address (after trimming and lower-casing) or is over 254 bytes. This
+  is decided before the rate limiter, so it does not count as an attempt.
+- `429` when rate-limited: 5 attempts per email, then one a minute, plus a per-IP ceiling of 10 in a
+  burst (an IPv6 client counts by its /64). Shared with the web sign-in form.
+- `503` with a `Retry-After` header (seconds) when the server is busy: at most 3 password checks run at
+  once, and a request waits up to 2 seconds for one. Nothing was decided; try again after the delay.
+  Treat it like any other 5xx (keep the credentials form, do not clear anything).
+- The request body is limited to 4 KB.
 
 ### `DELETE /api/token` - sign the app out
 
@@ -181,13 +192,24 @@ Bearer token required. `204`; the token stops working immediately. Local history
 
 ### `POST /api/sync`
 
-Push new records and deletions, and pull everything after `cursor`, in one round trip. The body is
-limited to 16 MB (`413` beyond that), so push in batches of at most 500 records.
+Push new records and deletions, and pull everything after `cursor`, in one round trip.
 
-Request (`push` and `deleted` may be omitted):
+Limits on a request (a client must stay inside all of them):
+
+- At most **1000 records in total** across every kind in `push`, and at most **1000 entries in
+  `deleted`**. More is `400` and nothing is stored. Clients send far fewer (below).
+- The body is at most 16 MB (`413` beyond that). Clients keep the record data of one request to about
+  **4 MB of JSON** (`4 * 1024 * 1024` bytes of serialized records, always at least one record) and at
+  most **500 records**, deletions at most 1000.
+- On `413`, halve the batch (records and bytes) and send again; a single record that still gets `413`
+  is an error to report, not to retry.
+
+Request (`push` and `deleted` may be omitted; `account` is optional on the wire, but the web and iPad
+always send it):
 
 ```json
 {
+  "account": "a@example.com",
   "cursor": 0,
   "push": {
     "check": [{ "id": "…", "ts": 1760000000000, "...": "the record's own fields" }],
@@ -209,18 +231,29 @@ Response (always every key, always arrays, never `null`):
 }
 ```
 
-- **Server checks:** each pushed record must be a JSON object with a string `id` (1-64 characters), a
-  positive numeric `ts`, and at most 64 KB. An unknown kind is rejected too. Anything else lands in
-  `rejected` and the rest of the push is still stored. Drop rejected records from the pending list
-  rather than resending them for ever. A record rejected for its size still carries its `id`.
+- **`account`** is the email the client believes it is signed in as (its stored sync state's `email`).
+  If it is present and, after trimming and lower-casing, differs from the authenticated user's email
+  (or is not a valid address), the server answers **`409` `{"error":"account mismatch"}`** and stores
+  and returns nothing. This is how a shared browser (or an app whose token was replaced) is stopped
+  from pushing one person's history into another's account. Omitting it skips the check.
+- **Server checks:** each pushed record must be a JSON object with a string `id` (1-64 bytes of UTF-8),
+  a numeric `ts` greater than 0, at most 64 KB, and no two top-level member names that match
+  case-insensitively. An unknown kind is rejected too. Anything else lands in `rejected` and the rest
+  of the push is still stored. Drop rejected records from the pending list rather than resending them
+  for ever. **A rejected record carries its `id` whenever the record has a string `id`, whatever the
+  reason** (size, `ts`, a case clash, an id of the wrong length); only a record with no string `id`, or
+  that is not a JSON object, is rejected without one.
 - **Order:** the push is applied first (records, then deletions), then changes after `cursor` are
   returned. The client's own just-pushed records therefore come back in `records`; merging by id makes
   that harmless.
-- **Paging:** at most 1000 changes per response. While `more` is true, call again with the new
-  `cursor` and nothing to push.
+- **Paging:** a response carries at most 1000 changes and at most about 4 MB of record data (a
+  tombstone counts as a small constant), and always at least one change when there is one. `more` is
+  true when either cap stopped the page. While `more` is true, call again with the new `cursor` and
+  nothing to push.
 - **Atomic:** the push is one transaction. If the request fails, nothing was stored, and sending the
   same push again is safe.
-- `400`: malformed JSON or a negative cursor. `401`: not signed in, meaning the token or cookie is
+- `400`: malformed JSON, a negative cursor, or more than 1000 records or deletions. `409`: `account`
+  does not match the signed-in user (above). `413`: body over 16 MB. `401`: not signed in, meaning the token or cookie is
   dead. A server fault while checking credentials is a `500`, never a `401`, so a client never drops a
   live token because of a passing error.
 
@@ -250,10 +283,15 @@ the Keychain, and the browser's cookie is HttpOnly.
    <email>?". On yes, queue every local record in `pendingAdds`. The server dedupes, so this is safe to
    offer on every sign-in. Start with `cursor` 0 and sync.
 4. **`sync()`:**
-   1. Take up to 500 entries from `pendingAdds` and look each up in the local store. Skip any that are
-      gone.
-   2. Send them with all of `pendingDeletes` and the stored `cursor`.
-   3. If sync was turned off, or on again, while the request was out, throw the response away.
+   1. Take entries from the front of `pendingAdds`, up to 500 and until their serialized JSON reaches
+      4 MB (always at least one), looking each up in the local store. Entries whose record is gone
+      count as taken and send nothing.
+   2. Send them with up to 1000 of `pendingDeletes`, the stored `cursor` and `account` (the stored
+      `email`).
+   3. If sync was turned off, or on again, while the request was out, throw the response away. The
+      web checks this two ways: an in-memory generation counter (this tab), and by re-reading the
+      stored sync state and comparing `email` (another tab changed it). Do the second wherever more
+      than one process can change the state.
    4. On `200`, remove exactly what was sent from the pending lists; entries queued while the request
       was in flight stay. Remove the `rejected` ones too.
    5. Merge `records` into the local store: union by id (the web also skips a check whose
@@ -263,12 +301,24 @@ the Keychain, and the browser's cookie is HttpOnly.
    8. Repeat while `more` is true or `pendingAdds` still has entries.
 5. **`401`:** turn sync off by removing the sync state (and the Keychain token on the iPad). Keep the
    local history, and show "Signed out - sign in again to sync".
+   **`409`:** the session belongs to another account than the one this device syncs with. Remove the
+   sync state (queue and cursor included) as for `401`, keep the local history, and show that the
+   account changed; signing in again starts a fresh sync (with the offer to add this device's records
+   to the new account). On the iPad the token is still valid, so ask which account to use rather than
+   silently keeping it.
+   **`413`:** halve the batch (records and bytes) and retry the round; give up with an error if a single
+   record is refused.
 6. **Network errors and `5xx`:** keep everything pending and try again on the next trigger.
 7. **Triggers:** page load or app launch; returning to the foreground (`visibilitychange` /
    `scenePhase == .active`); coming back online; a few seconds after each recorded check (debounced);
    and a "Sync now" button. Don't run two syncs at once.
 8. **Signing out:** the web posts to `/account/logout`, the app sends `DELETE /api/token`. Then remove
-   the sync state. Local history stays on the device.
+   the sync state. Local history stays on the device. The web clears it on the signed-out page
+   (`/account?notice=signed-out`, via `/static/signout.js`), so any sign-out path, including ending
+   this browser's own session from the device list, leaves no state behind.
+9. **No progress is an error.** If another round is wanted (`more`, or entries still pending) but the
+   last one removed nothing from the queues, pulled no record or tombstone and did not move the
+   cursor, stop and report an error instead of repeating the request.
 
 ## What is not synced
 

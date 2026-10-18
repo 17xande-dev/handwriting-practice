@@ -5,6 +5,7 @@ package handler
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"calligraphy/internal/account"
+	"calligraphy/internal/auth"
 	"calligraphy/internal/fonts"
 	"calligraphy/internal/history"
 	"calligraphy/internal/middleware"
@@ -125,7 +127,7 @@ func newServer(o Options) (*Server, error) {
 		accounts: o.Accounts, history: o.History, clientIP: o.ClientIP,
 		limits: limits{
 			loginEmail: middleware.NewLimiter(5, time.Minute),
-			loginIP:    middleware.NewLimiter(30, 10*time.Second),
+			loginIP:    middleware.NewLimiter(10, 10*time.Second),
 			password:   middleware.NewLimiter(5, time.Minute),
 		},
 	}
@@ -247,8 +249,43 @@ func (s *Server) renderData(w http.ResponseWriter, status int, file, title strin
 }
 
 func (s *Server) serverError(w http.ResponseWriter, err error) {
+	if errors.Is(err, auth.ErrBusy) {
+		busy(w)
+		return
+	}
 	s.log.Error("render", "err", err)
 	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+// busy answers a request that could not get an argon2 slot: 503 with a
+// Retry-After, which is a fault of load, not of the request.
+func busy(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "5")
+	http.Error(w, "the server is busy; try again in a few seconds", http.StatusServiceUnavailable)
+}
+
+// Form bodies are capped before they are read: sign-in and the admin forms
+// carry a couple of short fields, the password form three of at most 256
+// characters (up to three bytes each once percent-escaped).
+const (
+	maxFormBody     = 4 << 10
+	maxPasswordForm = 8 << 10
+)
+
+// parseForm reads a POSTed form under a size cap. It answers 413 itself and
+// reports false when the body is over the cap or unreadable.
+func parseForm(w http.ResponseWriter, r *http.Request, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	if err := r.ParseForm(); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, "form too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "bad form", http.StatusBadRequest)
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
@@ -31,6 +32,38 @@ var params = struct {
 	time, memory uint32
 	threads      uint8
 }{time: 3, memory: 64 * 1024, threads: 2}
+
+// maxConcurrent is how many argon2 computations may run at once, process-wide.
+// Each holds 64 MiB, so the cap is what keeps a burst of sign-ins (from many
+// addresses, past every per-IP limit) from exhausting the container's memory.
+const maxConcurrent = 3
+
+// acquireWait is how long a request queues for a slot before giving up.
+var acquireWait = 2 * time.Second
+
+var slots = make(chan struct{}, maxConcurrent)
+
+// ErrBusy means every argon2 slot stayed taken for acquireWait: answer 503
+// with Retry-After rather than pile more memory on.
+var ErrBusy = errors.New("auth: too many password checks in progress")
+
+func acquire() error {
+	select {
+	case slots <- struct{}{}:
+		return nil
+	default:
+	}
+	t := time.NewTimer(acquireWait)
+	defer t.Stop()
+	select {
+	case slots <- struct{}{}:
+		return nil
+	case <-t.C:
+		return ErrBusy
+	}
+}
+
+func release() { <-slots }
 
 const (
 	argonKeyLen  = 32
@@ -63,6 +96,14 @@ func CheckPolicy(pw string) error {
 // ($argon2id$v=19$m=…,t=…,p=…$salt$key), so the parameters travel with the
 // hash and can be raised later without breaking existing ones.
 func HashPassword(pw string) (string, error) {
+	if err := acquire(); err != nil {
+		return "", err
+	}
+	defer release()
+	return hashPassword(pw)
+}
+
+func hashPassword(pw string) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
@@ -81,6 +122,14 @@ func VerifyPassword(pw, hash string) (bool, error) {
 	if len(pw) > MaxPasswordLength {
 		return false, nil
 	}
+	if err := acquire(); err != nil {
+		return false, err
+	}
+	defer release()
+	return verifyPassword(pw, hash)
+}
+
+func verifyPassword(pw, hash string) (bool, error) {
 	parts := strings.Split(hash, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" {
 		return false, errBadHash
@@ -111,7 +160,7 @@ func VerifyPassword(pw, hash string) (bool, error) {
 // for a missing account costs the same as one for a real account: otherwise
 // the response time says which emails have accounts.
 var dummyHash = sync.OnceValue(func() string {
-	h, err := HashPassword("not a real password, only spends time")
+	h, err := hashPassword("not a real password, only spends time")
 	if err != nil {
 		panic(err)
 	}
@@ -119,8 +168,12 @@ var dummyHash = sync.OnceValue(func() string {
 })
 
 // SpendVerifyTime does the work of one VerifyPassword and discards it.
-func SpendVerifyTime(pw string) {
-	VerifyPassword(pw, dummyHash())
+func SpendVerifyTime(pw string) error {
+	_, err := VerifyPassword(pw, dummyHash())
+	if errors.Is(err, ErrBusy) {
+		return err
+	}
+	return nil
 }
 
 // passwordAlphabet leaves out characters that read alike (0/O, 1/l/I), since

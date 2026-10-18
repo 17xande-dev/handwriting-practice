@@ -37,10 +37,16 @@ especially "Record identity", which the Swift side must copy exactly. The app is
 - **Core `SyncClient`** in `HandwritingCore`, with an injected transport
   (`func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)`) so the whole algorithm
   runs under `swift test` with a fake. Behaviour to copy from the web:
-  - batches of at most 500;
+  - batches of at most 500 records **and** about 4 MB of serialized JSON, at most 1000 deletions;
+    on `413` halve the batch and retry;
+  - send `account` (the stored email) in every `/api/sync` body; on `409` turn sync off, keep history,
+    drop queue and cursor (as for `401`), and ask the user which account to use;
+  - treat a round that removed nothing from the queues, pulled nothing and did not move the cursor as
+    an error, never loop;
   - clear only what was sent; drop `rejected`;
   - loop while `more` is true;
   - on `401`, turn sync off but keep history;
+  - on `503` from `/api/token` (with `Retry-After`) show "busy, try again"; it is not a bad password;
   - on network errors and `5xx`, keep everything pending;
   - single flight: never two syncs at once;
   - a generation counter, so a response that arrives after a sign-out (and sign-in) is discarded;
@@ -68,9 +74,11 @@ especially "Record identity", which the Swift side must copy exactly. The app is
 
 ## Things that are easy to get wrong
 
-- **Ids are opaque strings of up to 64 characters.** Never parse them, except to produce the legacy
+- **Ids are opaque strings of 1-64 bytes of UTF-8** (count bytes, not Swift `Character`s). Never parse them, except to produce the legacy
   derivation above.
-- **`ts` is the check's `at`.** Not the time of the sync.
+- **`ts` is the check's `at`.** Not the time of the sync. It must be greater than 0.
+- **Record member names are exactly `id` and `ts`, lower case**, and no two members of a record may
+  differ only in case (the server rejects such a record, with its `id`).
 - **Deletions win.** After a pull says an id is deleted, remove it locally and from `pendingAdds`.
 - **A `401` means the token is dead**, not that the request was bad. Clear the token and sync state,
   keep history, show "Signed out".

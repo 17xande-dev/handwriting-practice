@@ -74,7 +74,7 @@ func get(t *testing.T, h http.Handler, target string) (*http.Response, string) {
 // servedPages is every HTML page the app serves, so the page-wide rules below
 // cover a worksheet added tomorrow without anyone remembering to list it.
 func servedPages() []string {
-	p := []string{"/", "/sheet/no-such-sheet", "/practice/new", "/progress", "/account"}
+	p := []string{"/", "/sheet/no-such-sheet", "/practice/new", "/progress", "/account", "/account?notice=signed-out"}
 	for _, s := range sheets.All() {
 		p = append(p, "/sheet/"+s.Slug)
 	}

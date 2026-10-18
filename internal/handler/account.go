@@ -1,14 +1,18 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"calligraphy/internal/account"
 	"calligraphy/internal/auth"
+	"calligraphy/internal/middleware"
 )
 
 // sessionCookie carries a browser's session token.
@@ -43,7 +47,9 @@ type accountView struct {
 }
 
 type loginPage struct {
-	Email, Next, Error string
+	Email, Next, Error, Notice string
+	// ClearSync loads the script that turns this browser's sync off.
+	ClearSync bool
 }
 
 type accountPage struct {
@@ -95,10 +101,28 @@ func clearSessionCookie(w http.ResponseWriter) {
 		Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 }
 
-// safeNext keeps a post-sign-in redirect on this site: a path, never
-// "//evil.example" or "/\evil.example", which browsers read as another host.
+// safeNext keeps a post-sign-in redirect on this site: a path starting with
+// exactly one "/", with no scheme, host or control characters. Browsers strip
+// tabs and newlines from a URL and read a backslash as a slash, so "/\tevil",
+// "/%09/evil.example" and "/\\evil" would all send the visitor to another
+// host. Anything doubtful is dropped (the redirect goes to /account).
 func safeNext(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
+	if next == "" || len(next) > 2048 || next[0] != '/' || strings.HasPrefix(next, "//") {
+		return ""
+	}
+	bad := func(s string) bool {
+		return strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f || r == '\\' })
+	}
+	if bad(next) {
+		return ""
+	}
+	u, err := url.Parse(next)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" {
+		return ""
+	}
+	// The decoded path must hold the same line: "/%09/evil.example" decodes
+	// to "/<tab>/evil.example", and a proxy or a later decode might act on it.
+	if bad(u.Path) || !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") {
 		return ""
 	}
 	return next
@@ -107,7 +131,14 @@ func safeNext(next string) string {
 func (s *Server) accountGet(w http.ResponseWriter, r *http.Request) {
 	u, sess, ok := s.currentUser(r)
 	if !ok {
-		s.renderData(w, http.StatusOK, "account.html", "Sign in", accountView{SignIn: &loginPage{Next: safeNext(r.URL.Query().Get("next"))}})
+		q := r.URL.Query()
+		// Signing out lands here, signed out. This is where the browser also
+		// forgets its local sync state (see static/signout.js), so the next
+		// person to use it cannot push their history into this account.
+		out := q.Get("notice") == "signed-out"
+		s.renderData(w, http.StatusOK, "account.html", "Sign in", accountView{SignIn: &loginPage{
+			Next: safeNext(q.Get("next")), Notice: notices[q.Get("notice")], ClearSync: out,
+		}})
 		return
 	}
 	sessions, err := s.accounts.Sessions(r.Context(), u.ID)
@@ -123,11 +154,21 @@ func (s *Server) accountGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	email := strings.TrimSpace(r.PostFormValue("email"))
-	password := r.PostFormValue("password")
-	next := safeNext(r.PostFormValue("next"))
+	if !parseForm(w, r, maxFormBody) {
+		return
+	}
+	rawEmail := strings.TrimSpace(r.PostForm.Get("email"))
+	password := r.PostForm.Get("password")
+	next := safeNext(r.PostForm.Get("next"))
 	fail := func(status int, msg string) {
-		s.renderData(w, status, "account.html", "Sign in", accountView{SignIn: &loginPage{Email: email, Next: next, Error: msg}})
+		s.renderData(w, status, "account.html", "Sign in", accountView{SignIn: &loginPage{Email: rawEmail, Next: next, Error: msg}})
+	}
+	// A malformed email never reaches the limiter, so junk cannot fill its map
+	// or cost an argon2 verify.
+	email, err := account.NormalizeEmail(rawEmail)
+	if err != nil {
+		fail(http.StatusBadRequest, "That is not a valid email address.")
+		return
 	}
 	if !s.allowLogin(r, email) {
 		fail(http.StatusTooManyRequests, accountErrors["rate-limited"])
@@ -147,6 +188,14 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
+	// Signing in over a live session (another account's, say) ends the old
+	// one: otherwise it lingers, valid but unreachable, in that account's
+	// device list.
+	if old, err := r.Cookie(sessionCookie); err == nil && old.Value != token {
+		if err := s.accounts.RevokeToken(r.Context(), old.Value); err != nil {
+			s.log.Error("revoke previous session", "err", err)
+		}
+	}
 	s.accounts.RecordLogin(r.Context(), u.ID)
 	s.setSessionCookie(w, token)
 	if next == "" {
@@ -155,23 +204,47 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
+// emailTag identifies an email in the logs without recording it: the first
+// bytes of its sha256, enough to correlate attempts on one address.
+func emailTag(email string) string {
+	sum := sha256.Sum256([]byte(email))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
 var errBadCredentials = errors.New("bad credentials")
 
-// allowLogin applies both sign-in limits. The tight one is keyed on the
-// email, which an attacker cannot shed the way they can a cookie; the looser
-// per-IP ceiling stops one address spraying many emails.
+// allowLogin applies both sign-in limits to an already normalised email. The
+// tight one is keyed on the email's hash, which an attacker cannot shed the
+// way they can a cookie; the looser per-IP ceiling (an IPv6 client counts by
+// its /64) stops one address spraying many emails. A refusal is logged.
 func (s *Server) allowLogin(r *http.Request, email string) bool {
-	return s.limits.loginIP.Allow(s.clientIP(r)) && s.limits.loginEmail.Allow(strings.ToLower(email))
+	ip := s.clientIP(r)
+	ipOK := s.limits.loginIP.Allow(middleware.IPKey(ip))
+	h := sha256.Sum256([]byte(email))
+	emailOK := s.limits.loginEmail.Allow(string(h[:]))
+	if !ipOK || !emailOK {
+		s.log.Warn("sign-in rate limited", "email", emailTag(email), "ip", ip, "path", r.URL.Path,
+			"by_ip", !ipOK, "by_email", !emailOK)
+	}
+	return ipOK && emailOK
 }
 
 // checkPassword is the one place a sign-in is decided, shared by the web
 // form and the app's token endpoint. Every failure costs one argon2 verify
-// and returns errBadCredentials, whatever the cause.
+// and returns errBadCredentials, whatever the cause. email is normalised.
 func (s *Server) checkPassword(r *http.Request, email, password string) (account.User, error) {
+	bad := func(why string) (account.User, error) {
+		// Never the password or the email itself; the why is for the operator
+		// only, the client sees one message.
+		s.log.Warn("sign-in failed", "email", emailTag(email), "ip", s.clientIP(r), "path", r.URL.Path, "why", why)
+		return account.User{}, errBadCredentials
+	}
 	u, err := s.accounts.ByEmail(r.Context(), email)
 	if errors.Is(err, account.ErrNotFound) {
-		auth.SpendVerifyTime(password)
-		return account.User{}, errBadCredentials
+		if err := auth.SpendVerifyTime(password); err != nil {
+			return account.User{}, err
+		}
+		return bad("unknown email")
 	}
 	if err != nil {
 		return account.User{}, err
@@ -182,13 +255,19 @@ func (s *Server) checkPassword(r *http.Request, email, password string) (account
 	}
 	// Disabled is checked after the password, so a disabled account answers
 	// exactly as a wrong password does.
-	if !ok || u.Disabled {
-		return account.User{}, errBadCredentials
+	if !ok {
+		return bad("wrong password")
+	}
+	if u.Disabled {
+		return bad("disabled")
 	}
 	return u, nil
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	if !parseForm(w, r, maxFormBody) {
+		return
+	}
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		if err := s.accounts.RevokeToken(r.Context(), c.Value); err != nil {
 			s.serverError(w, err)
@@ -208,6 +287,9 @@ func (s *Server) requireUser(next func(http.ResponseWriter, *http.Request, accou
 			http.Redirect(w, r, "/account", http.StatusSeeOther)
 			return
 		}
+		if r.Method == http.MethodPost && !parseForm(w, r, maxPasswordForm) {
+			return
+		}
 		next(w, r, u, sess)
 	}
 }
@@ -218,7 +300,8 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, u accoun
 	}
 	// Limited like sign-in: a form that checks the current password is a
 	// guessing oracle for anyone holding a stolen cookie.
-	if !s.limits.loginIP.Allow(s.clientIP(r)) || !s.limits.password.Allow(strconv.FormatInt(u.ID, 10)) {
+	if !s.limits.loginIP.Allow(middleware.IPKey(s.clientIP(r))) || !s.limits.password.Allow(strconv.FormatInt(u.ID, 10)) {
+		s.log.Warn("password change rate limited", "user", u.ID, "ip", s.clientIP(r))
 		back("rate-limited")
 		return
 	}
@@ -228,6 +311,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, u accoun
 		return
 	}
 	if !ok {
+		s.log.Warn("password change failed", "user", u.ID, "ip", s.clientIP(r))
 		back("wrong-password")
 		return
 	}

@@ -17,7 +17,7 @@ import {
   type SyncState,
   type SyncStore,
 } from "./progress-store.ts";
-import { ago, BATCH, checkSignedIn, type FetchFn, sync } from "./sync.ts";
+import { ago, BATCH, checkSignedIn, type FetchFn, MAX_BODY_BYTES, sync } from "./sync.ts";
 
 /**
  * An in-memory store with the same rules as DeviceStore, built from the same
@@ -181,6 +181,7 @@ Deno.test("clear queues every removed check and ink record as a deletion", () =>
 // ---- the sync loop --------------------------------------------------------
 
 interface Call {
+  account?: string;
   cursor: number;
   push: Record<string, { id: string }[]>;
   deleted: { kind: string; id: string }[];
@@ -415,4 +416,117 @@ Deno.test("ago words", () => {
   assertEquals(ago(now - 120_000, now), "2 min ago");
   assertEquals(ago(now - 3 * 3_600_000, now), "3 h ago");
   assertFalse(ago(now - 3 * 86_400_000, now).includes("ago"));
+});
+
+Deno.test("every request names the account it believes it syncs with", async () => {
+  const store = syncedStore();
+  store.add(check());
+  const srv = fakeServer((c) => {
+    assertEquals(c.account, "a@example.com");
+    return json(answer());
+  });
+  assertEquals((await sync(store, srv.f)).status, "ok");
+});
+
+Deno.test("409 account mismatch turns sync off, keeps history, and clears the queue", async () => {
+  const store = syncedStore({ cursor: 9 });
+  store.add(check());
+  const srv = fakeServer(() => json({ error: "account mismatch" }, 409));
+  assertEquals(await sync(store, srv.f), { status: "account-mismatch" });
+  assertEquals(store.state, null);
+  assertEquals(store.checks.length, 1);
+});
+
+Deno.test("a sync-state change made by another tab discards the response", async () => {
+  const store = syncedStore({ cursor: 5 });
+  store.add(check());
+  const srv = fakeServer(() => {
+    // Another tab signed in as someone else: the stored state changes but this
+    // tab's own generation counter does not.
+    store.state = freshSyncState("b@example.com");
+    return json(
+      answer({ cursor: 99, records: { check: [identify({ ...check(), id: "stale" })] } }),
+    );
+  });
+  assertEquals(await sync(store, srv.f), { status: "off" });
+  assertEquals(store.state!.email, "b@example.com");
+  assertEquals(store.state!.cursor, 0);
+  assertFalse(store.checks.some((c) => c.id === "stale"));
+});
+
+Deno.test("batches are capped by JSON bytes as well as by count", async () => {
+  const store = syncedStore();
+  // ~1 MB each: only three fit under the 4 MB cap.
+  const pad = "x".repeat(1 << 20);
+  for (let i = 0; i < 5; i++) store.add(check({ line: pad + i }));
+  const sizes: number[] = [];
+  const srv = fakeServer(
+    (c) => {
+      sizes.push(c.push.check.length);
+      return json(answer());
+    },
+    (c) => {
+      sizes.push(c.push.check.length);
+      return json(answer());
+    },
+  );
+  assertEquals((await sync(store, srv.f)).status, "ok");
+  assertEquals(sizes, [3, 2]);
+  assert(MAX_BODY_BYTES === 4 << 20);
+});
+
+Deno.test("a 413 halves the batch and retries", async () => {
+  const store = syncedStore();
+  for (let i = 0; i < 8; i++) store.add(check());
+  const sizes: number[] = [];
+  const srv = fakeServer(
+    (c) => {
+      sizes.push(c.push.check.length);
+      return json({ error: "too large" }, 413);
+    },
+    (c) => {
+      sizes.push(c.push.check.length);
+      return json({ error: "too large" }, 413);
+    },
+    (c) => {
+      sizes.push(c.push.check.length);
+      return json(answer());
+    },
+    (c) => {
+      sizes.push(c.push.check.length);
+      return json(answer());
+    },
+    (c) => {
+      sizes.push(c.push.check.length);
+      return json(answer());
+    },
+    (c) => {
+      sizes.push(c.push.check.length);
+      return json(answer());
+    },
+  );
+  assertEquals((await sync(store, srv.f)).status, "ok");
+  assertEquals(sizes, [8, 4, 2, 2, 2, 2]);
+  assertEquals(store.state!.pendingAdds, []);
+});
+
+Deno.test("a 413 for a single record is an error, not a loop", async () => {
+  const store = syncedStore();
+  store.add(check());
+  const srv = fakeServer(() => json({ error: "too large" }, 413));
+  assertEquals((await sync(store, srv.f)).status, "error");
+  assertEquals(store.state!.pendingAdds.length, 1);
+});
+
+Deno.test("a round that neither shrinks the queue nor pulls anything stops with an error", async () => {
+  const store = syncedStore();
+  // The server says there is more but returns nothing and no cursor movement.
+  let calls = 0;
+  const f: FetchFn = () => {
+    calls++;
+    return Promise.resolve(json(answer({ cursor: 0, more: true })));
+  };
+  const r = await sync(store, f);
+  assertEquals(r.status, "error");
+  assertEquals(calls, 1);
 });

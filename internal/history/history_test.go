@@ -29,7 +29,7 @@ func run(kind, id string) Record {
 
 func pullAll(t *testing.T, s *Store, user, cursor int64) ([]Record, int64) {
 	t.Helper()
-	recs, next, more, err := s.Pull(ctx, user, cursor, 1000)
+	recs, next, more, err := s.Pull(ctx, user, cursor, 1000, 4<<20)
 	if err != nil || more {
 		t.Fatalf("pull: %v more=%v", err, more)
 	}
@@ -126,7 +126,7 @@ func TestPullPages(t *testing.T) {
 		if pages > 5 {
 			t.Fatal("pagination does not end")
 		}
-		recs, next, more, err := s.Pull(ctx, a, cursor, 10)
+		recs, next, more, err := s.Pull(ctx, a, cursor, 10, 4<<20)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -167,5 +167,110 @@ func TestCheckRecord(t *testing.T) {
 	}
 	if _, err := CheckRecord("chord", json.RawMessage(good)); err == nil {
 		t.Error("unknown kind accepted")
+	}
+}
+
+// Whatever the reason a record is refused, its id comes back with the
+// reason, or a client cannot tell which queued record was refused and would
+// resend it for ever.
+func TestCheckRecordRejectionsCarryTheID(t *testing.T) {
+	for name, raw := range map[string]string{
+		"no ts":        `{"id":"a"}`,
+		"string ts":    `{"id":"a","ts":"1"}`,
+		"zero ts":      `{"id":"a","ts":0}`,
+		"case clash":   `{"id":"a","ts":1,"ID":"b"}`,
+		"oversize":     `{"id":"a","ts":1,"x":"` + strings.Repeat("y", MaxRecordBytes) + `"}`,
+		"oversize ts":  `{"id":"a","x":"` + strings.Repeat("y", MaxRecordBytes) + `"}`,
+		"too long id":  `{"id":"` + strings.Repeat("a", 65) + `","ts":1}`,
+		"multibyte id": `{"id":"` + strings.Repeat("é", 33) + `","ts":1}`,
+		"empty id":     `{"id":"","ts":1}`,
+	} {
+		id, err := CheckRecord("check", json.RawMessage(raw))
+		if err == nil {
+			t.Errorf("%s accepted", name)
+			continue
+		}
+		want := `a`
+		switch name {
+		case "too long id":
+			want = strings.Repeat("a", 65)
+		case "multibyte id":
+			want = strings.Repeat("é", 33)
+		case "empty id":
+			want = ""
+		}
+		if id != want {
+			t.Errorf("%s: rejected with id %q, want %q (%v)", name, truncate(id), truncate(want), err)
+		}
+	}
+	// Not a string id: nothing to report.
+	if id, err := CheckRecord("check", json.RawMessage(`{"id":5,"ts":1}`)); err == nil || id != "" {
+		t.Errorf("numeric id: %q %v", id, err)
+	}
+}
+
+func truncate(s string) string {
+	if len(s) > 20 {
+		return s[:20] + "..."
+	}
+	return s
+}
+
+// "id" and "ID" would read as one field to Go's decoder and two to the
+// iPad's, so a record with both is refused rather than stored ambiguously.
+func TestCheckRecordRefusesCaseInsensitiveDuplicates(t *testing.T) {
+	for _, raw := range []string{
+		`{"id":"a","ts":1,"ID":"b"}`,
+		`{"id":"a","ts":1,"Ts":2}`,
+		`{"id":"a","ts":1,"note":1,"NOTE":2}`,
+		`{"id":"a","ts":1,"id":"b"}`,
+	} {
+		if _, err := CheckRecord("check", json.RawMessage(raw)); err == nil || !strings.Contains(err.Error(), "duplicate top-level field") {
+			t.Errorf("%s: %v", raw, err)
+		}
+	}
+	// A record with only "ID" has no "id" the iPad would find either.
+	if _, err := CheckRecord("check", json.RawMessage(`{"ID":"a","ts":1}`)); err == nil {
+		t.Error("an upper-case-only ID was accepted")
+	}
+}
+
+// A pull page is capped by the bytes it carries as well as by its record
+// count, and always advances by at least one record.
+func TestPullCapsPagesByBytes(t *testing.T) {
+	s, user, _ := setup(t)
+	pad := strings.Repeat("x", 1000)
+	var recs []Record
+	for i := range 10 {
+		id := fmt.Sprintf("r%d", i)
+		recs = append(recs, Record{Kind: "check", ID: id, Data: json.RawMessage(fmt.Sprintf(`{"id":%q,"ts":1,"p":%q}`, id, pad))})
+	}
+	if err := s.Push(ctx, user, recs, nil); err != nil {
+		t.Fatal(err)
+	}
+	var cursor int64
+	var pages, total int
+	for {
+		got, next, more, err := s.Pull(ctx, user, cursor, 1000, 3500)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) == 0 || len(got) > 3 {
+			t.Fatalf("page of %d records under a 3500 byte cap (1 KB each)", len(got))
+		}
+		total += len(got)
+		pages++
+		cursor = next
+		if !more {
+			break
+		}
+	}
+	if total != 10 || pages != 4 {
+		t.Errorf("%d records in %d pages, want 10 in 4", total, pages)
+	}
+	// One record bigger than the cap still comes back alone.
+	got, _, _, err := s.Pull(ctx, user, 0, 1000, 10)
+	if err != nil || len(got) != 1 {
+		t.Errorf("tiny cap: %d records, %v", len(got), err)
 	}
 }

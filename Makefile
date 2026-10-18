@@ -1,4 +1,4 @@
-.PHONY: run bundle build test vet fmt check up down fonts-fetch fixtures
+.PHONY: deploy run bundle build test vet fmt check up down fonts-fetch fixtures
 
 ADDR ?= :8083
 DB_PATH ?= $(HOME)/.local/share/handwriting/handwriting.db
@@ -8,7 +8,7 @@ run: bundle
 	@mkdir -p $(dir $(DB_PATH))
 	ADDR=$(ADDR) DB_PATH=$(DB_PATH) go run .
 
-## bundle: compile web/*.ts into internal/handler/static/app.js (checked in, so go build alone works)
+## bundle: compile web/*.ts into internal/handler/static/*.js (checked in, so go build alone works)
 bundle:
 	deno task -q bundle
 
@@ -40,10 +40,17 @@ check:
 	deno task -q check
 	go vet ./...
 	deno task -q test
-	@tmp=$$(mktemp) && cp internal/handler/static/app.js $$tmp && deno task -q bundle >/dev/null 2>&1; \
-	  cmp -s internal/handler/static/app.js $$tmp; s=$$?; rm -f $$tmp; \
-	  [ $$s -eq 0 ] || { echo "app.js was stale against web/; rebundled it, commit the result"; exit 1; }
+	@tmp=$$(mktemp -d) && cp internal/handler/static/*.js $$tmp/ && deno task -q bundle >/dev/null 2>&1; \
+	  s=0; for f in $$tmp/*.js; do cmp -s $$f internal/handler/static/$$(basename $$f) || s=1; done; rm -rf $$tmp; \
+	  [ $$s -eq 0 ] || { echo "a bundle was stale against web/; rebundled it, commit the result"; exit 1; }
 	go test -count=1 ./...
+
+DEPLOY_HOST ?= ubuntu@192.168.0.30
+
+## deploy: copy HEAD to the Docker host (DEPLOY_HOST=user@host) and rebuild and restart the stack there
+deploy:
+	git archive HEAD | ssh $(DEPLOY_HOST) 'mkdir -p ~/handwriting && tar -x -C ~/handwriting'
+	ssh $(DEPLOY_HOST) 'cd ~/handwriting && sudo docker compose -f compose.prod.yaml up -d --build'
 
 up:
 	docker compose up -d --build

@@ -65,6 +65,9 @@ func (s *Server) requireAdmin(next func(http.ResponseWriter, *http.Request, acco
 			http.NotFound(w, r)
 			return
 		}
+		if r.Method == http.MethodPost && !parseForm(w, r, maxFormBody) {
+			return
+		}
 		next(w, r, u)
 	}
 }

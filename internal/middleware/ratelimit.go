@@ -28,6 +28,24 @@ type bucket struct {
 	seen time.Time
 }
 
+// Len is how many buckets are held, for tests.
+func (l *Limiter) Len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.buckets)
+}
+
+// Keys lists the held bucket keys, for tests.
+func (l *Limiter) Keys() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	keys := make([]string, 0, len(l.buckets))
+	for k := range l.buckets {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // NewLimiter allows burst events at once, then one per interval.
 func NewLimiter(burst int, interval time.Duration) *Limiter {
 	return &Limiter{
@@ -63,14 +81,24 @@ func (l *Limiter) Allow(key string) bool {
 
 // ClientIP returns the visitor's address: from header when the deployment
 // names one (a proxy such as Cloudflare sets it), else the connection's.
-// With a header configured, only the first address counts — later ones were
-// appended by proxies, the first is what the client presented.
+//
+// A single-value header the proxy overwrites (CF-Connecting-IP, X-Real-IP) is
+// the safe choice. X-Forwarded-For is a list every hop appends to, and the
+// client may have put anything at its front, so for that header only the
+// rightmost entry (the one our own proxy added) is trusted. Any other header
+// is read whole.
 func ClientIP(header string) func(*http.Request) string {
+	header = http.CanonicalHeaderKey(header)
 	return func(r *http.Request) string {
 		if header != "" {
-			if v := r.Header.Get(header); v != "" {
-				first, _, _ := strings.Cut(v, ",")
-				if ip := net.ParseIP(strings.TrimSpace(first)); ip != nil {
+			if v := r.Header.Values(header); len(v) > 0 {
+				last := v[len(v)-1]
+				if header == "X-Forwarded-For" {
+					if i := strings.LastIndexByte(last, ','); i >= 0 {
+						last = last[i+1:]
+					}
+				}
+				if ip := net.ParseIP(strings.TrimSpace(last)); ip != nil {
 					return ip.String()
 				}
 			}
@@ -81,4 +109,18 @@ func ClientIP(header string) func(*http.Request) string {
 		}
 		return host
 	}
+}
+
+// IPKey is the key a per-IP limiter should use for ip: an IPv6 client owns a
+// whole /64 (any one subscriber can pick addresses freely within it), so the
+// /64 is one bucket; an IPv4 address is its own.
+func IPKey(ip string) string {
+	a := net.ParseIP(ip)
+	if a == nil {
+		return ip
+	}
+	if a4 := a.To4(); a4 != nil {
+		return a4.String()
+	}
+	return a.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }

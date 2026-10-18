@@ -3,10 +3,12 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"calligraphy/internal/account"
+	"calligraphy/internal/auth"
 	"calligraphy/internal/history"
 )
 
@@ -22,6 +24,12 @@ const (
 	// pullLimit is how many changes one response carries; the client asks
 	// again while "more" is true.
 	pullLimit = 1000
+	// pullBytes caps the record data in one response, so a page of large
+	// records stays a few MB however few of them there are.
+	pullBytes = 4 << 20
+	// maxPush caps the records (across both kinds) and the deletions in one
+	// request. Bigger first syncs are sent in several requests.
+	maxPush = 1000
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -103,7 +111,11 @@ func (s *Server) apiToken(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "expected {email, password, label}")
 		return
 	}
-	email := strings.TrimSpace(req.Email)
+	email, err := account.NormalizeEmail(req.Email)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "email is not a valid address")
+		return
+	}
 	if !s.allowLogin(r, email) {
 		apiError(w, http.StatusTooManyRequests, "too many attempts; wait a minute")
 		return
@@ -111,6 +123,11 @@ func (s *Server) apiToken(w http.ResponseWriter, r *http.Request) {
 	u, err := s.checkPassword(r, email, req.Password)
 	if errors.Is(err, errBadCredentials) {
 		apiError(w, http.StatusUnauthorized, loginFailed)
+		return
+	}
+	if errors.Is(err, auth.ErrBusy) {
+		w.Header().Set("Retry-After", "5")
+		apiError(w, http.StatusServiceUnavailable, "the server is busy; try again in a few seconds")
 		return
 	}
 	if err != nil {
@@ -140,6 +157,11 @@ func (s *Server) apiTokenDelete(w http.ResponseWriter, r *http.Request, u accoun
 }
 
 type syncRequest struct {
+	// Account is the email the client believes it is signed in as. Optional
+	// on the wire, but the web and iPad clients always send it: a shared
+	// browser whose cookie now belongs to someone else must not push the
+	// previous person's history into that account.
+	Account string                       `json:"account"`
 	Cursor  int64                        `json:"cursor"`
 	Push    map[string][]json.RawMessage `json:"push"`
 	Deleted []history.Ref                `json:"deleted"`
@@ -176,8 +198,22 @@ func (s *Server) apiSync(w http.ResponseWriter, r *http.Request, u account.User,
 		apiError(w, http.StatusBadRequest, "malformed sync request")
 		return
 	}
+	if req.Account != "" {
+		if want, err := account.NormalizeEmail(req.Account); err != nil || want != u.Email {
+			apiError(w, http.StatusConflict, "account mismatch")
+			return
+		}
+	}
 	if req.Cursor < 0 {
 		apiError(w, http.StatusBadRequest, "cursor must not be negative")
+		return
+	}
+	pushed := 0
+	for _, raws := range req.Push {
+		pushed += len(raws)
+	}
+	if pushed > maxPush || len(req.Deleted) > maxPush {
+		apiError(w, http.StatusBadRequest, fmt.Sprintf("send at most %d records and %d deletions per request", maxPush, maxPush))
 		return
 	}
 	resp := syncResponse{Records: map[string][]json.RawMessage{}, Deleted: []history.Ref{}, Rejected: []rejected{}}
@@ -196,7 +232,7 @@ func (s *Server) apiSync(w http.ResponseWriter, r *http.Request, u account.User,
 		s.serverError(w, err)
 		return
 	}
-	changes, next, more, err := s.history.Pull(r.Context(), u.ID, req.Cursor, pullLimit)
+	changes, next, more, err := s.history.Pull(r.Context(), u.ID, req.Cursor, pullLimit, pullBytes)
 	if err != nil {
 		s.serverError(w, err)
 		return

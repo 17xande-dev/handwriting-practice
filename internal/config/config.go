@@ -29,7 +29,10 @@ type Config struct {
 	DBPath string
 
 	// ClientIPHeader names the header carrying the visitor's address when a
-	// proxy sits in front (CF-Connecting-IP behind Cloudflare, X-Forwarded-For or X-Real-IP behind nginx or Traefik). Empty means
+	// proxy sits in front. Prefer a single-value header the proxy overwrites
+	// (CF-Connecting-IP behind Cloudflare, X-Real-IP behind nginx). For
+	// X-Forwarded-For only the rightmost entry is used, the one the nearest
+	// proxy appended; the client controls everything to its left. Empty means
 	// use the connection's own address. Only set it when every request
 	// arrives through that proxy: otherwise anyone can send the header and
 	// pick their own rate-limit bucket.

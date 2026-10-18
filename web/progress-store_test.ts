@@ -1,10 +1,18 @@
 /// <reference lib="deno.ns" />
 
-import { assert, assertEquals, assertMatch, assertNotEquals } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertFalse,
+  assertMatch,
+  assertNotEquals,
+  assertThrows,
+} from "@std/assert";
 import {
   type CheckRecord,
   cyrb53,
   freshSyncState,
+  hasIdentity,
   identify,
   isRecord,
   legacyId,
@@ -14,6 +22,7 @@ import {
   planMerge,
   queueAdds,
   queueDeletes,
+  validId,
 } from "./progress-store.ts";
 
 const line = (at: number, over: Partial<LooseCheck> = {}): LooseCheck => ({
@@ -147,4 +156,20 @@ Deno.test("legacy id test vectors", () => {
     legacyId({ at: 1700000000000.9, sheet: "x", line: "y" }),
     "legacy-loyw3v28-cd46e230def4c",
   );
+});
+
+Deno.test("ids count UTF-8 bytes, and a record needs a positive at", () => {
+  assert(validId("a".repeat(64)));
+  assertFalse(validId("a".repeat(65)));
+  assertFalse(validId(""));
+  assert(validId("é".repeat(32))); // 64 bytes
+  assertFalse(validId("é".repeat(33))); // 33 UTF-16 units but 66 bytes
+  assertFalse(validId("😀".repeat(17))); // 34 units, 68 bytes
+  assertFalse(isRecord(line(0)));
+  assertFalse(isRecord(line(-5)));
+  assertFalse(isRecord(line(1000, { id: "é".repeat(33) })));
+  assertFalse(hasIdentity({ id: "é".repeat(33), ts: 1 }));
+  assertThrows(() => identify(line(0)));
+  // A 66-byte id is not kept: the record gets its derived one instead.
+  assertEquals(identify(line(5, { id: "é".repeat(33) })).id, legacyId(line(5)));
 });

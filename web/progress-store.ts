@@ -155,9 +155,25 @@ export function legacyId(r: Pick<NewCheck, "at" | "sheet" | "line">): string {
   return `legacy-${at.toString(36)}-${cyrb53(`${at}|${r.sheet}|${r.line}`)}`;
 }
 
-/** Give a record its sync identity: the id it has, or a legacy one, and ts = at. */
+const utf8 = new TextEncoder();
+
+/**
+ * Whether an id is acceptable to the server: a string of 1-64 bytes of UTF-8
+ * (bytes, not UTF-16 units: "é" is two, an emoji four).
+ */
+export function validId(id: unknown): id is string {
+  if (typeof id !== "string" || id.length === 0 || id.length > 64) return false;
+  return utf8.encode(id).length <= 64;
+}
+
+/**
+ * Give a record its sync identity: the id it has, or a legacy one, and
+ * ts = at. The server refuses a ts that is not positive, so a record whose
+ * `at` is not cannot be synced and is refused here instead.
+ */
 export function identify(r: LooseCheck): CheckRecord {
-  const id = typeof r.id === "string" && r.id.length >= 1 && r.id.length <= 64 ? r.id : legacyId(r);
+  if (!(r.at > 0)) throw new RangeError("a record needs a positive at to be identified");
+  const id = validId(r.id) ? r.id : legacyId(r);
   return { ...r, id, ts: r.at };
 }
 
@@ -165,7 +181,8 @@ export function identify(r: LooseCheck): CheckRecord {
 function identifiable(x: unknown): x is LooseCheck {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;
-  return typeof r.at === "number" && Number.isFinite(r.at) && typeof r.sheet === "string" &&
+  return typeof r.at === "number" && Number.isFinite(r.at) && r.at > 0 &&
+    typeof r.sheet === "string" &&
     typeof r.line === "string";
 }
 
@@ -184,10 +201,10 @@ export function isRecord(x: unknown): x is LooseCheck {
   const r = x as Record<string, unknown>;
   const str = (v: unknown, max: number) => typeof v === "string" && v.length <= max;
   const num = (v: unknown) => typeof v === "number" && Number.isFinite(v);
-  return (r.id === undefined ||
-    (typeof r.id === "string" && r.id.length >= 1 && r.id.length <= 64)) &&
+  return (r.id === undefined || validId(r.id)) &&
     (r.ts === undefined || num(r.ts)) &&
-    num(r.at) && str(r.sheet, 64) && str(r.sheetTitle, 200) && str(r.line, 200) &&
+    num(r.at) && (r.at as number) > 0 && str(r.sheet, 64) && str(r.sheetTitle, 200) &&
+    str(r.line, 200) &&
     str(r.model, 64) && str(r.modelName, 200) && (r.pen === "monoline" || r.pen === "edged") &&
     num(r.score) && (r.score as number) >= 0 && (r.score as number) <= 100 &&
     Array.isArray(r.letters) && r.letters.length <= 200 &&
@@ -203,7 +220,7 @@ export function isRecord(x: unknown): x is LooseCheck {
 export function hasIdentity(x: unknown): x is { id: string; ts: number } {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;
-  return typeof r.id === "string" && r.id.length >= 1 && r.id.length <= 64 &&
+  return validId(r.id) &&
     typeof r.ts === "number" && Number.isFinite(r.ts) && r.ts > 0;
 }
 

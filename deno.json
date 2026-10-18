@@ -11,7 +11,7 @@
     "noFallthroughCasesInSwitch": true
   },
   "tasks": {
-    "bundle": "deno bundle --platform=browser --minify --output=internal/handler/static/app.js web/main.ts && deno bundle --platform=browser --minify --output=internal/handler/static/progress.js web/progress.ts",
+    "bundle": "deno bundle --platform=browser --minify --output=internal/handler/static/app.js web/main.ts && deno bundle --platform=browser --minify --output=internal/handler/static/progress.js web/progress.ts && deno bundle --platform=browser --minify --output=internal/handler/static/signout.js web/signout.ts && deno bundle --platform=browser --minify --output=internal/handler/static/debug.js web/debug.ts",
     "check": "deno check web/",
     "test": "deno test web/"
   },

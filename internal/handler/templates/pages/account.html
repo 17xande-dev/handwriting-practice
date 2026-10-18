@@ -1,9 +1,11 @@
+{{define "scripts"}}{{with .Data.SignIn}}{{if .ClearSync}}<script type="module" src="{{asset "signout.js"}}"></script>{{end}}{{end}}{{end}}
 {{define "content"}}
 <div class="inner account">
 {{with .Data.SignIn}}
 <section class="account-narrow">
   <h1>Sign in</h1>
   <p>Signing in keeps your checked lines in step between this browser and the Italic practice iPad app. Accounts are created by the site's admin; there is no sign-up.</p>
+  {{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
   {{if .Error}}<p class="notice error" role="alert">{{.Error}}</p>{{end}}
   <form class="panel stack-form" method="post" action="/account/login">
     {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
