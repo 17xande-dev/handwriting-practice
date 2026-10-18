@@ -1,15 +1,18 @@
 // Entry point: wires the toolbar to the pen preview and every row on a
 // worksheet page.
 
-import { type Metrics, modelStrokes, notes, renderModelRaster } from "./evaluate.ts";
-import { median } from "./evalcore.ts";
+import { modelStrokes, renderModelRaster } from "./evaluate.ts";
+import { sheetScoreLine } from "./details.ts";
+import { encodeInk } from "./ink-codec.ts";
+import { lineCheckOf, metrics2Of, pen2Of, summarise } from "./metric-scores.ts";
+import { rowKey, sanitizeStrokes } from "./stroke-store.ts";
 import { familyList, loadGoogleFont, validFamilyName } from "./googlefont.ts";
 import { History } from "./history.ts";
 import { measureFont, measureSlant } from "./measure.ts";
 import { drawPreview } from "./preview.ts";
 import { attachWritingArea } from "./pen.ts";
 import { Row, type Theme } from "./row.ts";
-import { DeviceStore } from "./progress-store.ts";
+import { DeviceStore, type InkRecord, type Metrics2 } from "./progress-store.ts";
 import { installSync } from "./sync-triggers.ts";
 import { type Settings, Toolbar } from "./settings.ts";
 
@@ -188,7 +191,9 @@ function main() {
     return chip?.closest(".chip")?.querySelector(".chip-name")?.textContent ?? s.model;
   };
   for (const r of rows) {
-    r.onRecord = (result, pen) => {
+    r.onRecord = (result, pen, metrics, strokes) => {
+      const xh = r.xh;
+      const pen2 = pen2Of(strokes);
       store.add({
         at: Date.now(),
         sheet: rowsEl.dataset.sheet || "custom",
@@ -200,11 +205,50 @@ function main() {
         score: result.score,
         letters: result.letters.map(({ char, score, missing }) => ({ char, score, missing })),
         metrics: result.metrics,
-      }).then(() => syncer.schedule()).catch(() => {
+        metrics2: metrics2Of(metrics, result.letters) as unknown as Metrics2,
+        ...(pen2 ? { pen2 } : {}),
+      }).then(async (rec) => {
+        // One ink record per recorded check, so the attempt can be shown again (and replayed
+        // on the iPad); it syncs like the check does.
+        const enc = encodeInk(strokes, rec.id, rec.at, xh);
+        if (enc) await store.addInk(enc.record as unknown as InkRecord);
+        syncer.schedule();
+      }).catch(() => {
         // Storage unavailable (private browsing, quota): the check still shows.
       });
     };
   }
+  keepWriting(rows, rowsEl.dataset.sheet || "custom", store);
+}
+
+/**
+ * What is written survives a reload: each row's strokes are saved to IndexedDB a moment after
+ * the last change (and at once when the page is hidden), and put back when the sheet opens.
+ */
+function keepWriting(rows: Row[], sheet: string, store: DeviceStore) {
+  const pending = new Map<number, ReturnType<typeof setTimeout>>();
+  const save = (i: number) => {
+    clearTimeout(pending.get(i));
+    pending.delete(i);
+    const s = rows[i].strokes;
+    store.saveStrokes(rowKey(sheet, i, rows[i].text), s.length ? s : null).catch(() => {
+      // Storage unavailable: the writing just doesn't survive a reload.
+    });
+  };
+  rows.forEach((r, i) => {
+    r.onStrokes = () => {
+      clearTimeout(pending.get(i));
+      pending.set(i, setTimeout(() => save(i), 600));
+    };
+    store.loadStrokes(rowKey(sheet, i, r.text)).then((x) => r.restore(sanitizeStrokes(x))).catch(
+      () => {},
+    );
+  });
+  const flush = () => [...pending.keys()].forEach(save);
+  addEventListener("pagehide", flush);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flush();
+  });
 }
 
 /**
@@ -279,7 +323,8 @@ function attachSheetCheck(rows: Row[]) {
   }
 
   button.addEventListener("click", () => {
-    const checked = rows.filter((r) => r.hasInk).map((r) => r.check()).filter((x) => x !== null);
+    const checkedRows = rows.filter((r) => r.hasInk && r.check() !== null);
+    const checked = checkedRows.map((r) => r.result);
     summary.replaceChildren();
     shown = true;
     summary.hidden = false;
@@ -293,42 +338,22 @@ function attachSheetCheck(rows: Row[]) {
       return;
     }
 
-    const overall = Math.round(checked.reduce((a, r) => a + r.score, 0) / checked.length);
+    const sum = summarise(
+      checkedRows.map((r) => lineCheckOf(r.result!, r.metrics!, r.strokes)),
+    )!;
     const p = document.createElement("p");
-    p.textContent = `${overall}% across ${checked.length} line${checked.length === 1 ? "" : "s"}.`;
+    p.textContent = sum.headline;
     summary.append(p);
-
-    // The letters to work on: the lowest average scores across every line.
-    const byChar = new Map<string, number[]>();
-    for (const r of checked) {
-      for (const l of r.letters) byChar.set(l.char, [...(byChar.get(l.char) ?? []), l.score]);
+    // Sub-score means across the lines that have them.
+    if (sum.scores) {
+      const scores = document.createElement("p");
+      scores.className = "sheet-scores";
+      scores.textContent = sheetScoreLine(sum.scores);
+      summary.append(scores);
     }
-    const weakest = [...byChar].map(([ch, xs]) =>
-      [ch, xs.reduce((a, b) => a + b, 0) / xs.length] as const
-    )
-      .filter(([, avg]) => avg < 85)
-      .sort((a, b) => a[1] - b[1])
-      .slice(0, 3);
-    const tips: string[] = [];
-    if (weakest.length) {
-      tips.push(
-        `Letters to practise: ${
-          weakest.map(([ch, avg]) => `${ch} (${Math.round(avg)}%)`).join(", ")
-        }.`,
-      );
-    }
-    // Tendencies across the sheet, from the lines' measurements.
-    const across = (k: keyof Metrics) =>
-      median(checked.map((r) => r.metrics[k]).filter((x) => Number.isFinite(x)));
-    tips.push(...notes({
-      slantDiff: across("slantDiff"),
-      size: across("size"),
-      width: across("width"),
-      baseline: across("baseline"),
-    }));
-    if (tips.length) {
+    if (sum.tips.length) {
       const ul = document.createElement("ul");
-      for (const t of tips) {
+      for (const t of sum.tips) {
         const li = document.createElement("li");
         li.textContent = t;
         ul.append(li);

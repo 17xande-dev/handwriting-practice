@@ -4,6 +4,10 @@
 import { type Band, band, toUnits } from "./geometry.ts";
 import { drawGuides, type GuideColors } from "./guides.ts";
 import { check, type CheckResult, colouredRuns, deviationColors, drawOverlay } from "./evaluate.ts";
+import { renderPanel, scoreClass, subScoreLine } from "./details.ts";
+import { type LineMetrics, lineMetrics } from "./metric-scores.ts";
+import { Replay, type ReplayMode } from "./replay.ts";
+import { drawWorstSegment } from "./worst.ts";
 import { drawStroke, type Point, type Stroke } from "./ink.ts";
 import { type FontInfo, fontString } from "./measure.ts";
 import type { History } from "./history.ts";
@@ -44,7 +48,11 @@ function resize(s: Surface, b: Band) {
   s.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
+/** Rows on the page, so each one's replay radio buttons get their own group name. */
+let rowCount = 0;
+
 export class Row {
+  #id = ++rowCount;
   #el: HTMLElement;
   #text: string;
   #ref: Surface;
@@ -60,7 +68,19 @@ export class Row {
   #slant = 0;
   /** The last check, while it still describes what's on the line. */
   #result: CheckResult | null = null;
+  /** The last check's metrics, with the result. */
+  #metrics: LineMetrics | null = null;
   #showResult = true;
+  /** The Details panel is open. */
+  #details = false;
+  #replay: Replay;
+  #replaySurface: Surface;
+  #replaying = false;
+  #replayMode: ReplayMode = "ink";
+  #replaySpeed = 1;
+  #replayButton: HTMLButtonElement | null = null;
+  /** Set while a saved row of writing is put back, which is not an edit to save again. */
+  #restoring = false;
   /** Called after this row is checked or its check is cleared. */
   onResult: () => void = () => {};
   /**
@@ -68,7 +88,9 @@ export class Row {
    * check of each version of the writing. Checking again without writing
    * anything new isn't another attempt.
    */
-  onRecord: (r: CheckResult, pen: "monoline" | "edged") => void = () => {};
+  onRecord: (r: CheckResult, pen: string, m: LineMetrics, strokes: Stroke[]) => void = () => {};
+  /** Called with the line's writing after every change to it (the caller debounces its saving). */
+  onStrokes: (strokes: Stroke[]) => void = () => {};
   /** Bumped whenever the writing changes; the version last recorded. */
   #version = 0;
   #recorded = -1;
@@ -100,6 +122,24 @@ export class Row {
     this.#ref = surface(el.querySelector(".reference canvas") as HTMLCanvasElement);
     this.#practice = surface(el.querySelector(".practice canvas") as HTMLCanvasElement);
     this.#base = surface(document.createElement("canvas"));
+    // The replay's canvas lies over the practice line and never takes the pen.
+    const replayCanvas = document.createElement("canvas");
+    replayCanvas.className = "replay";
+    replayCanvas.setAttribute("aria-hidden", "true");
+    this.#practice.canvas.parentElement?.append(replayCanvas);
+    this.#replaySurface = surface(replayCanvas);
+    this.#replay = new Replay(replayCanvas);
+    this.#replay.onEnd = () => this.#replayEnded();
+    // A replay stops when the line scrolls out of view or the page is left.
+    if (typeof IntersectionObserver === "function") {
+      new IntersectionObserver((entries) => {
+        if (entries.some((e) => !e.isIntersecting)) this.#replay.stop();
+      }).observe(el);
+    }
+    addEventListener("pagehide", () => this.#replay.stop());
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") this.#replay.stop();
+    });
     this.#clear = el.querySelector('[data-action="clear"]') as HTMLButtonElement;
     this.#check = el.querySelector('[data-action="check"]') as HTMLButtonElement;
     this.#resultEl = el.querySelector(".check-result") as HTMLElement;
@@ -213,6 +253,7 @@ export class Row {
     }
     this.#font = font;
     this.#slant = font.slant;
+    this.#replay.stop();
 
     // Normally the sheet has already fitted xh to its longest line; this
     // only matters for a row laid out on its own.
@@ -224,6 +265,7 @@ export class Row {
     }
     resize(this.#ref, b);
     resize(this.#practice, b);
+    resize(this.#replaySurface, b);
     resize(this.#base, b);
 
     drawGuides(this.#ref.ctx, b, this.#theme.guides, this.#slant);
@@ -241,6 +283,8 @@ export class Row {
     const p: Point = { u, v, p: s.p, t: s.t };
     if (s.alt !== undefined) p.alt = s.alt;
     if (s.az !== undefined) p.az = s.az;
+    if (s.roll !== undefined) p.roll = s.roll;
+    if (s.force !== undefined) p.force = s.force;
     return p;
   }
 
@@ -258,6 +302,25 @@ export class Row {
   get hasInk(): boolean {
     return this.#strokes.length > 0;
   }
+  /** The last check's metrics (null once the writing has changed). */
+  get metrics(): LineMetrics | null {
+    return this.#metrics;
+  }
+  get strokes(): Stroke[] {
+    return this.#strokes;
+  }
+  /** The x-height in CSS pixels the line is laid out at (0 before the first layout). */
+  get xh(): number {
+    return this.#band?.xh ?? 0;
+  }
+
+  /** Put back writing saved earlier, unless something has been written since. */
+  restore(strokes: Stroke[]) {
+    if (this.#strokes.length || strokes.length === 0) return;
+    this.#restoring = true;
+    this.#setStrokes(strokes);
+    this.#restoring = false;
+  }
 
   /** For browser tests only (#debug): replace the line's writing. */
   debugWrite(make: (text: string, font: FontInfo) => Stroke[]) {
@@ -269,11 +332,18 @@ export class Row {
   /** Compare what's written with the model, and show where it strays. */
   check(): CheckResult | null {
     if (!this.#font || this.#strokes.length === 0) return null;
+    this.#replay.stop();
     this.#result = check(this.#text, this.#font, this.#strokes);
+    this.#metrics = this.#result ? lineMetrics(this.#text, this.#strokes, this.#result) : null;
     this.#showResult = true;
-    if (this.#result && this.#recorded !== this.#version) {
+    if (this.#result && this.#metrics && this.#recorded !== this.#version) {
       this.#recorded = this.#version;
-      this.onRecord(this.#result, this.#strokes[this.#strokes.length - 1].pen.kind);
+      this.onRecord(
+        this.#result,
+        this.#strokes[this.#strokes.length - 1].pen.kind,
+        this.#metrics,
+        this.#strokes,
+      );
     }
     this.#renderResult();
     this.#rebuildBase();
@@ -285,6 +355,8 @@ export class Row {
   #clearResult() {
     if (!this.#result) return;
     this.#result = null;
+    this.#metrics = null;
+    this.#details = false;
     this.#renderResult();
     this.onResult();
   }
@@ -314,7 +386,30 @@ export class Row {
       this.#rebuildBase();
       this.#draw();
     });
-    head.append(score, toggle);
+    const m = this.#metrics;
+    const line = document.createElement("span");
+    line.className = "result-scores";
+    line.textContent = m ? subScoreLine(m.scores) : "";
+    head.append(score, line);
+    let panel: HTMLElement | null = null;
+    if (m) {
+      const details = document.createElement("button");
+      details.type = "button";
+      details.className = "result-toggle";
+      const sync = () => {
+        details.textContent = this.#details ? "Hide details" : "Details";
+        details.setAttribute("aria-expanded", String(this.#details));
+        if (panel) panel.hidden = !this.#details;
+      };
+      details.addEventListener("click", () => {
+        this.#details = !this.#details;
+        sync();
+      });
+      panel = renderPanel(m);
+      sync();
+      head.append(details);
+    }
+    head.append(toggle);
 
     const letters = document.createElement("ol");
     letters.className = "result-letters";
@@ -348,6 +443,100 @@ export class Row {
       }
       el.append(notes);
     }
+    if (m) el.append(this.#replayControls());
+    if (panel) el.append(panel);
+  }
+
+  /** Replay, with its colour mode (Ink / Speed / Pressure heat) and speed (1x / 2x). */
+  #replayControls(): HTMLElement {
+    const box = document.createElement("div");
+    box.className = "replay-controls";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "replay-button";
+    button.addEventListener("click", () => {
+      if (this.#replaying) this.#replay.stop();
+      else this.#startReplay();
+    });
+    this.#replayButton = button;
+    this.#syncReplayButton();
+    const group = (
+      label: string,
+      name: string,
+      options: Array<[string, string]>,
+      current: string,
+      pick: (v: string) => void,
+    ) => {
+      const g = document.createElement("fieldset");
+      g.className = "range replay-seg";
+      const legend = document.createElement("legend");
+      legend.className = "visually-hidden";
+      legend.textContent = label;
+      g.append(legend);
+      for (const [value, text] of options) {
+        const l = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.name = `${name}-${this.#id}`;
+        input.value = value;
+        input.checked = value === current;
+        input.addEventListener("change", () => {
+          pick(value);
+          // A running replay restarts with the new choice.
+          if (this.#replaying) this.#startReplay();
+        });
+        const span = document.createElement("span");
+        span.textContent = text;
+        l.append(input, span);
+        g.append(l);
+      }
+      return g;
+    };
+    box.append(
+      button,
+      group(
+        "Replay colour",
+        "replay-mode",
+        [["ink", "Ink"], ["speed", "Speed"], ["pressure", "Pressure"]],
+        this.#replayMode,
+        (v) => this.#replayMode = v as ReplayMode,
+      ),
+      group(
+        "Replay speed",
+        "replay-speed",
+        [["1", "1\u00D7"], ["2", "2\u00D7"]],
+        String(this.#replaySpeed),
+        (v) => this.#replaySpeed = Number(v),
+      ),
+    );
+    return box;
+  }
+
+  #syncReplayButton() {
+    const b = this.#replayButton;
+    if (!b) return;
+    b.textContent = this.#replaying ? "Stop" : "Replay";
+    b.setAttribute("aria-pressed", String(this.#replaying));
+  }
+
+  /** Write the attempt again from its strokes, with its timing. */
+  #startReplay() {
+    const b = this.#band;
+    if (!b || this.#strokes.length === 0) return;
+    this.#replaying = true;
+    this.#replay.start(this.#strokes, this.#replayMode, this.#replaySpeed, b, this.#theme.penInk);
+    this.#syncReplayButton();
+    // The finished ink gives way to the replay, which redraws it as it goes.
+    this.#rebuildBase();
+    this.#draw();
+  }
+
+  #replayEnded() {
+    if (!this.#replaying) return;
+    this.#replaying = false;
+    this.#syncReplayButton();
+    this.#rebuildBase();
+    this.#draw();
   }
 
   /** Replace the line's writing (never mutated in place, so edits can hold the old list). */
@@ -363,11 +552,13 @@ export class Row {
     // Anything written, undone or cleared makes the last check stale, and
     // makes the next check a new attempt.
     this.#version++;
+    this.#replay.stop();
     this.#clearResult();
     // Exposed for tests and the browser console; not used by the app itself.
     this.#practice.canvas.dataset.strokes = String(n);
     this.#rebuildBase();
     this.#draw();
+    if (!this.#restoring) this.onStrokes(this.#strokes);
   }
 
   #rebuildBase() {
@@ -376,6 +567,8 @@ export class Row {
     const ctx = this.#base.ctx;
     ctx.clearRect(0, 0, b.width, b.height);
     drawGuides(ctx, b, this.#theme.guides, this.#slant);
+    // While replaying, the replay canvas is the ink: only the guides stay.
+    if (this.#replaying) return;
     const r = this.#showResult ? this.#result : null;
     if (!r) {
       for (const s of this.#strokes) drawStroke(ctx, b, s, this.#theme.penInk);
@@ -389,6 +582,7 @@ export class Row {
         drawStroke(ctx, b, run.stroke, deviationColors[run.cls]);
       }
     });
+    drawWorstSegment(ctx, b, this.#strokes, this.#metrics?.shape.worst, deviationColors[2]);
   }
 
   #schedule() {
@@ -419,9 +613,4 @@ export class Row {
       drawStroke(ctx, b, shown, this.#theme.penInk);
     }
   }
-}
-
-/** A score's colour band, as a class name. */
-function scoreClass(score: number): string {
-  return score >= 85 ? "good" : score >= 65 ? "fair" : "poor";
 }

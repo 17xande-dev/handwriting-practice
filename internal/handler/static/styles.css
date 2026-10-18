@@ -660,6 +660,90 @@ button.primary {
 
 .result-toggle { min-width: 0; font-size: 0.85rem; }
 
+.result-head { flex-wrap: wrap; }
+
+/* "Consistency 88 · Pen control 73 · Fluency 80" beside the line score. */
+.result-scores {
+  flex: 1 1 12rem;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The replay's canvas lies over the practice line; the pen goes straight through it. */
+.practice canvas.replay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.replay-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm);
+
+  .range { margin: 0; }
+  .replay-button { min-width: 6rem; }
+}
+
+/* The Details panel: four score bars, the notes, and every number behind them. */
+.metrics-panel {
+  display: grid;
+  gap: var(--gap-sm);
+  padding: var(--gap-sm);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+
+  &[hidden] { display: none; }
+}
+
+.score-bars {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: var(--gap-sm) var(--gap-md);
+}
+
+.score-bar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  row-gap: 4px;
+
+  .bar-name { font-size: 0.85rem; font-weight: 500; color: var(--ink-soft); }
+  .bar-value { font-size: 1.1rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .bar-value.unmeasured { color: var(--ink-faint); }
+  .bar-track {
+    grid-column: 1 / -1;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--rule);
+  }
+  .bar-fill { height: 100%; min-width: 8px; border-radius: 4px; background: currentColor; }
+  .bar-fill:not(.good, .fair, .poor) { display: none; }
+}
+
+.panel-notes {
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+}
+
+.metric-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 2px var(--gap-md);
+  margin: 0;
+  font-size: 0.9rem;
+
+  div { display: flex; justify-content: space-between; gap: var(--gap-sm); }
+  dt { color: var(--ink-soft); }
+  dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+}
+
 .result-letters {
   display: flex;
   flex-wrap: wrap;
@@ -713,6 +797,7 @@ button.primary {
 
   h2 { margin: 0 0 var(--gap-xs); font-size: 1.1rem; }
   p { margin: var(--gap-xs) 0; }
+  .sheet-scores { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
   ul { margin: var(--gap-xs) 0 0; padding-left: 1.2rem; color: var(--ink-soft); }
 }
 
