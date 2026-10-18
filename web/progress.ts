@@ -370,7 +370,12 @@ function letterChart(rs: CheckRecord[]): Chart {
       scales: {
         x: axis({
           grid: { display: false },
-          ticks: { color: ink.text, padding: 4, font: { size: 15 }, autoSkip: false },
+          ticks: {
+            color: ink.text,
+            padding: 4,
+            font: { size: ls.length > 30 ? 11 : 15 },
+            autoSkip: false,
+          },
         }),
         y: axis({ min: 0, max: 100, ticks: { color: ink.muted, stepSize: 25, padding: 6 } }),
       },

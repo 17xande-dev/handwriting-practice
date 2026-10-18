@@ -84,12 +84,20 @@ export interface Letter {
   missing: number;
 }
 
-/** Per letter written (lowercase letters only), alphabetically. */
+/** Lowercase, then capitals, then numerals: the order letters are listed in. */
+function letterGroup(c: string): number {
+  return /^\p{Ll}$/u.test(c) ? 0 : /^\p{Lu}$/u.test(c) ? 1 : 2;
+}
+
+/**
+ * Per letter, capital and numeral written: lowercase first, then capitals,
+ * then numerals, each alphabetically. Punctuation and spaces are left out.
+ */
 export function byLetter(rs: CheckRecord[]): Letter[] {
   const by = new Map<string, { scores: number[]; missing: number }>();
   for (const r of rs) {
     for (const l of r.letters) {
-      if (!/^\p{Ll}$/u.test(l.char)) continue;
+      if (!/^[\p{L}\p{Nd}]$/u.test(l.char)) continue;
       const e = by.get(l.char) ?? { scores: [], missing: 0 };
       e.scores.push(l.score);
       if (l.missing) e.missing++;
@@ -101,7 +109,7 @@ export function byLetter(rs: CheckRecord[]): Letter[] {
     mean: mean(e.scores),
     count: e.scores.length,
     missing: e.missing,
-  })).sort((a, b) => a.char.localeCompare(b.char));
+  })).sort((a, b) => letterGroup(a.char) - letterGroup(b.char) || a.char.localeCompare(b.char));
 }
 
 export interface Headline {

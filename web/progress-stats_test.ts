@@ -48,9 +48,9 @@ Deno.test("exercises are counted by lines and days, most practised first", () =>
   assertEquals(ex[0].lastDayMean, 90);
 });
 
-Deno.test("letters: lowercase only, alphabetical", () => {
-  const ls = byLetter([rec(noon(2026, 10, 1), 80, "custom", "ba,A ")]);
-  assertEquals(ls.map((l) => l.char), ["a", "b"]);
+Deno.test("letters: lowercase, then capitals, then numerals; no punctuation", () => {
+  const ls = byLetter([rec(noon(2026, 10, 1), 80, "custom", "b2aBA,1 ")]);
+  assertEquals(ls.map((l) => l.char), ["a", "b", "A", "B", "1", "2"]);
 });
 
 // A streak survives until the end of the day after the last practice, so
