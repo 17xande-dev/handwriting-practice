@@ -1,18 +1,20 @@
 .PHONY: run bundle build test vet fmt check up down fonts-fetch fixtures
 
 ADDR ?= :8083
+DB_PATH ?= $(HOME)/.local/share/handwriting/handwriting.db
 
-## run: bundle the TypeScript and run the server on the host (ADDR=0.0.0.0:8083 to reach it from an iPad)
+## run: bundle the TypeScript and run the server on the host (ADDR=0.0.0.0:8083 to reach it from an iPad; DB_PATH names the SQLite file)
 run: bundle
-	ADDR=$(ADDR) go run .
+	@mkdir -p $(dir $(DB_PATH))
+	ADDR=$(ADDR) DB_PATH=$(DB_PATH) go run .
 
 ## bundle: compile web/*.ts into internal/handler/static/app.js (checked in, so go build alone works)
 bundle:
 	deno task -q bundle
 
-## build: a static binary in ./bin
+## build: a binary in ./bin (cgo, for SQLite; the Dockerfile builds the static one)
 build: bundle
-	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/calligraphy .
+	go build -trimpath -ldflags="-s -w" -o bin/calligraphy .
 
 ## test: every Go and TypeScript test
 test:

@@ -11,25 +11,67 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"time"
 
+	"calligraphy/internal/account"
 	"calligraphy/internal/fonts"
+	"calligraphy/internal/history"
+	"calligraphy/internal/middleware"
 	"calligraphy/internal/sheets"
 )
 
 //go:embed templates
 var templateFS embed.FS
 
+// Options is everything New needs.
+type Options struct {
+	Fonts []fonts.Font
+	Log   *slog.Logger
+
+	// Accounts is the users and sessions store.
+	Accounts *account.Store
+	// History is the synced check and ink records.
+	History *history.Store
+
+	// ClientIP returns the visitor's address for rate limiting; nil means
+	// the connection's own address.
+	ClientIP func(*http.Request) string
+
+	// HSTS adds Strict-Transport-Security; only for an https deployment.
+	HSTS bool
+}
+
 // Server holds everything a request needs; it is built once at startup.
 type Server struct {
-	fonts  []fonts.Font
-	assets assets
-	pages  map[string]*template.Template
-	log    *slog.Logger
+	fonts    []fonts.Font
+	assets   assets
+	pages    map[string]*template.Template
+	log      *slog.Logger
+	policy   Policy
+	accounts *account.Store
+	history  *history.Store
+	clientIP func(*http.Request) string
+	limits   limits
+}
+
+// limits are the rate limits on everything that verifies a password. Each
+// verify costs ~100ms and 64 MiB, so an unmetered one is both a guessing
+// oracle and a memory lever.
+type limits struct {
+	// loginEmail is tight: five tries, then one a minute, per email.
+	loginEmail *middleware.Limiter
+	// loginIP is looser, so one address cannot spray many emails.
+	loginIP *middleware.Limiter
+	// password limits the change-password form per account. It is keyed on
+	// the user, not the cookie, which an attacker could simply discard.
+	password *middleware.Limiter
 }
 
 // page is the data every template receives.
 type page struct {
 	Title string
+	// Data is what the account and admin pages need beyond the layout.
+	Data  any
 	Fonts []fonts.Font
 	// Groups is the catalogue as the picker shows it: family tiles, each with
 	// its variant chips. Default is the variant a worksheet opens with.
@@ -47,11 +89,23 @@ type page struct {
 	MaxRunes int
 }
 
-// New builds the server. Every failure here (an unparsable template, a page
-// missing its content block) is a startup failure, never a broken page later.
-func New(fontList []fonts.Font, log *slog.Logger) (http.Handler, error) {
-	if err := fonts.Validate(fontList); err != nil {
+// New builds the handler. Every failure here (an unparsable template, a page
+// missing its content block, a font catalogue that fails validation) is a
+// startup failure, never a broken page later.
+func New(o Options) (http.Handler, error) {
+	s, err := newServer(o)
+	if err != nil {
 		return nil, err
+	}
+	return s.Routes(), nil
+}
+
+func newServer(o Options) (*Server, error) {
+	if err := fonts.Validate(o.Fonts); err != nil {
+		return nil, err
+	}
+	if o.Accounts == nil || o.History == nil {
+		return nil, fmt.Errorf("handler: no account or history store")
 	}
 	a, err := loadAssets()
 	if err != nil {
@@ -59,32 +113,80 @@ func New(fontList []fonts.Font, log *slog.Logger) (http.Handler, error) {
 	}
 	// font.css names the bundled font files by their hashed URLs, so it is
 	// generated once the other assets are loaded, and then becomes one itself.
-	css, err := fonts.CSS(fontList, a.url)
+	css, err := fonts.CSS(o.Fonts, a.url)
 	if err != nil {
 		return nil, err
 	}
 	a.add("font.css", css)
-	s := &Server{fonts: fontList, assets: a, log: log}
+	policy := newPolicy(o.Fonts)
+	policy.HSTS = o.HSTS
+	s := &Server{
+		fonts: o.Fonts, assets: a, log: o.Log, policy: policy,
+		accounts: o.Accounts, history: o.History, clientIP: o.ClientIP,
+		limits: limits{
+			loginEmail: middleware.NewLimiter(5, time.Minute),
+			loginIP:    middleware.NewLimiter(30, 10*time.Second),
+			password:   middleware.NewLimiter(5, time.Minute),
+		},
+	}
+	if s.clientIP == nil {
+		s.clientIP = middleware.ClientIP("")
+	}
 	if s.pages, err = parsePages(a); err != nil {
 		return nil, err
 	}
+	return s, nil
+}
 
+// handleFunc registers one route. Every route goes through one, so a test
+// can collect the complete list (see TestEveryRouteIsPublicOrProtected)
+// instead of trusting a second, hand-kept list to stay in step.
+type handleFunc func(pattern string, f http.Handler)
+
+// Routes returns the whole site behind its security headers.
+//
+// Every state-changing request passes the stdlib's cross-origin check
+// (Sec-Fetch-Site, falling back to Origin against Host), which is the CSRF
+// defence for the forms and the API alike. A request from the iPad app
+// carries neither header and passes; it authenticates with a bearer token a
+// browser would never attach on its own.
+func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", s.index)
-	mux.HandleFunc("GET /sheet/{slug}", s.sheet)
-	mux.HandleFunc("GET /progress", s.progress)
-	mux.HandleFunc("GET /practice/new", s.customForm)
-	mux.HandleFunc("POST /practice/new", s.customForm)
-	mux.HandleFunc("POST /practice", s.custom)
-	mux.HandleFunc("GET /practice", func(w http.ResponseWriter, r *http.Request) {
+	s.routes(func(pattern string, f http.Handler) { mux.Handle(pattern, f) })
+	return securityHeaders(s.policy, adminHeaders(http.NewCrossOriginProtection().Handler(mux)))
+}
+
+func (s *Server) routes(handle handleFunc) {
+	s.register(handle)
+	s.registerAPI(handle)
+	s.registerAdmin(handle)
+}
+
+func (s *Server) register(handle handleFunc) {
+	handle("GET /{$}", http.HandlerFunc(s.index))
+	handle("GET /sheet/{slug}", http.HandlerFunc(s.sheet))
+	handle("GET /progress", http.HandlerFunc(s.progress))
+	handle("GET /practice/new", http.HandlerFunc(s.customForm))
+	handle("POST /practice/new", http.HandlerFunc(s.customForm))
+	handle("POST /practice", http.HandlerFunc(s.custom))
+	handle("GET /practice", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/practice/new", http.StatusSeeOther)
-	})
-	mux.HandleFunc("GET /static/", a.serve)
-	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		u, _ := a.url("favicon.svg")
+	}))
+	handle("GET /static/", http.HandlerFunc(s.assets.serve))
+	handle("GET /favicon.ico", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, _ := s.assets.url("favicon.svg")
 		http.Redirect(w, r, u, http.StatusMovedPermanently)
-	})
-	return securityHeaders(newPolicy(fontList), mux), nil
+	}))
+	handle("GET /healthz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte("ok\n"))
+	}))
+
+	handle("GET /account", http.HandlerFunc(s.accountGet))
+	handle("POST /account/login", http.HandlerFunc(s.login))
+	handle("POST /account/logout", http.HandlerFunc(s.logout))
+	handle("POST /account/password", s.requireUser(s.changePassword))
+	handle("POST /account/sessions/{id}/revoke", s.requireUser(s.revokeSession))
 }
 
 // parsePages parses one template set per page (the layout plus that page),
@@ -94,6 +196,7 @@ func parsePages(a assets) (map[string]*template.Template, error) {
 	funcs := template.FuncMap{
 		"asset": a.url,
 		"inc":   func(i int) int { return i + 1 },
+		"when":  when,
 	}
 	names, err := fs.Glob(templateFS, "templates/pages/*.html")
 	if err != nil {
@@ -134,6 +237,18 @@ func (s *Server) render(w http.ResponseWriter, status int, name string, data pag
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = buf.WriteTo(w)
+}
+
+// renderData renders an account or admin page. These carry someone's account
+// (emails, sessions, a generated password), so they are never cached.
+func (s *Server) renderData(w http.ResponseWriter, status int, file, title string, data any) {
+	w.Header().Set("Cache-Control", "no-store")
+	s.render(w, status, file, page{Title: title, Data: data})
+}
+
+func (s *Server) serverError(w http.ResponseWriter, err error) {
+	s.log.Error("render", "err", err)
+	http.Error(w, "internal server error", http.StatusInternalServerError)
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"html"
 	"io"
 	"log/slog"
@@ -12,17 +13,53 @@ import (
 	"strings"
 	"testing"
 
+	"calligraphy/internal/account"
+	"calligraphy/internal/dbtest"
 	"calligraphy/internal/fonts"
+	"calligraphy/internal/history"
 	"calligraphy/internal/sheets"
 )
 
 func newTestServer(t *testing.T, list []fonts.Font) http.Handler {
 	t.Helper()
-	h, err := New(list, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h, err := New(testOptions(t, list))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return h
+}
+
+func testOptions(t testing.TB, list []fonts.Font) Options {
+	o, _ := testOptionsDB(t, list)
+	return o
+}
+
+func testOptionsDB(t testing.TB, list []fonts.Font) (Options, *sql.DB) {
+	t.Helper()
+	d := dbtest.New(t)
+	return Options{
+		Fonts: list, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Accounts: account.NewStore(d), History: history.NewStore(d),
+	}, d
+}
+
+// testServer is a server over its own fresh database, for the account, admin
+// and API tests, which need the stores and the unwrapped Server.
+type testServer struct {
+	srv      *Server
+	accounts *account.Store
+	routes   http.Handler
+	db       *sql.DB
+}
+
+func newAccountServer(t *testing.T) *testServer {
+	t.Helper()
+	o, d := testOptionsDB(t, fonts.Builtin)
+	srv, err := newServer(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testServer{srv: srv, accounts: o.Accounts, routes: srv.Routes(), db: d}
 }
 
 func get(t *testing.T, h http.Handler, target string) (*http.Response, string) {
@@ -37,7 +74,7 @@ func get(t *testing.T, h http.Handler, target string) (*http.Response, string) {
 // servedPages is every HTML page the app serves, so the page-wide rules below
 // cover a worksheet added tomorrow without anyone remembering to list it.
 func servedPages() []string {
-	p := []string{"/", "/sheet/no-such-sheet", "/practice/new", "/progress"}
+	p := []string{"/", "/sheet/no-such-sheet", "/practice/new", "/progress", "/account"}
 	for _, s := range sheets.All() {
 		p = append(p, "/sheet/"+s.Slug)
 	}
@@ -208,7 +245,7 @@ func TestSheetOffersAnyGoogleFont(t *testing.T) {
 // A catalogue that fails validation must stop the server starting, not
 // produce a stylesheet with an unescaped family name in it.
 func TestInvalidCatalogueFailsStartup(t *testing.T) {
-	_, err := New([]fonts.Font{{ID: "x", Group: "X", Variant: "X", Family: `x"; }`, Default: true}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := New(testOptions(t, []fonts.Font{{ID: "x", Group: "X", Variant: "X", Family: `x"; }`, Default: true}}))
 	if err == nil {
 		t.Fatal("New accepted an unsafe font family")
 	}
@@ -434,6 +471,73 @@ func TestPagesLinkToSource(t *testing.T) {
 		_, body := get(t, h, p)
 		if !strings.Contains(body, `href="https://github.com/17xande-dev/handwriting-practice"`) {
 			t.Errorf("%s: no link to the GitHub repository", p)
+		}
+	}
+}
+
+// The account and admin pages are served under the same strict CSP as the
+// worksheets, and carry no inline style, handler or script. An admin session
+// is needed to see the admin pages, so this signs one in.
+func TestAccountAndAdminPagesAreCSPClean(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "boss@x.com", true)
+	other := s.addUser(t, "other@x.com", false)
+	cookie := s.signIn(t, "boss@x.com", testPassword)
+	want := s.srv.policy.String()
+	pages := []struct{ method, path, cookie string }{
+		{"GET", "/account", ""},
+		{"GET", "/account", cookie},
+		{"GET", "/admin/users", cookie},
+		{"GET", "/admin/users/" + itoa(other.ID) + "/delete", cookie},
+		{"POST", "/admin/users/" + itoa(other.ID) + "/reset", cookie},
+	}
+	for _, p := range pages {
+		rec := s.do(t, p.method, p.path, url.Values{}, p.cookie)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s %s: status %d", p.method, p.path, rec.Code)
+			continue
+		}
+		if got := rec.Header().Get("Content-Security-Policy"); got != want {
+			t.Errorf("%s: CSP %q, want the site policy %q", p.path, got, want)
+		}
+		body := rec.Body.String()
+		for name, re := range map[string]*regexp.Regexp{
+			"style attribute": inlineStyle, "event handler": inlineHandler,
+			"inline script": inlineScript, "style element": styleElement,
+		} {
+			if m := re.FindString(body); m != "" {
+				t.Errorf("%s: %s: %s", p.path, name, m)
+			}
+		}
+	}
+}
+
+// HSTS pins a browser to https, so it is sent only when the deployment says
+// it is https: from a plain-HTTP localhost it would break the next project
+// on that port.
+func TestHSTSOnlyWhenConfigured(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	if res, _ := get(t, h, "/"); res.Header.Get("Strict-Transport-Security") != "" {
+		t.Error("HSTS sent by default")
+	}
+	o := testOptions(t, fonts.Builtin)
+	o.HSTS = true
+	h, err := New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, _ := get(t, h, "/")
+	if hsts := res.Header.Get("Strict-Transport-Security"); !strings.Contains(hsts, "max-age=") || strings.Contains(hsts, "preload") {
+		t.Errorf("HSTS = %q", hsts)
+	}
+}
+
+func TestAdminResponsesAreNotIndexedOrCached(t *testing.T) {
+	s := newAccountServer(t)
+	for _, p := range []string{"/admin/users", "/admin/nope"} {
+		h := s.do(t, "GET", p, nil, "").Header()
+		if h.Get("X-Robots-Tag") != "noindex" || h.Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: X-Robots-Tag %q, Cache-Control %q", p, h.Get("X-Robots-Tag"), h.Get("Cache-Control"))
 		}
 	}
 }

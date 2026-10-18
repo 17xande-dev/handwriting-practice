@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="inner account">
+{{with .Data}}
+<div class="admin-head">
+  <h1>Accounts</h1>
+  <a href="/account">Your account</a>
+</div>
+{{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
+
+<section class="panel account-narrow" aria-labelledby="create-title">
+  <h2 id="create-title">New account</h2>
+  {{if .Error}}<p class="notice error" role="alert">{{.Error}}</p>{{end}}
+  <form class="stack-form" method="post" action="/admin/users">
+    <div class="field">
+      <label for="new-email">Email</label>
+      <input id="new-email" name="email" type="email" autocomplete="off" required value="{{.Email}}">
+    </div>
+    <label class="check"><input type="checkbox" name="admin" value="1"{{if .Admin}} checked{{end}}> Admin (can manage accounts)</label>
+    <p class="field-note">A password is generated and shown once on the next page. The person signs in with it here or in the iPad app, then changes it.</p>
+    <div class="actions"><button type="submit">Create account</button></div>
+  </form>
+</section>
+
+<section class="panel" aria-labelledby="users-title">
+  <h2 id="users-title">Everyone</h2>
+  <div class="table-scroll">
+    <table class="data admin-users">
+      <thead><tr><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Last sign-in</th><th scope="col" class="num">Devices</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+      {{range .Users}}
+        <tr>
+          <td class="cell-email">{{.Email}}{{if eq .ID $.Data.SelfID}} <strong>(you)</strong>{{end}}</td>
+          <td data-label="Role">{{if .IsAdmin}}Admin{{else}}Member{{end}}</td>
+          <td data-label="Status">{{if .Disabled}}<span class="status-off">Disabled</span>{{else}}Active{{end}}</td>
+          <td data-label="Created">{{when .CreatedAt}}</td>
+          <td data-label="Last sign-in">{{when .LastLoginAt}}</td>
+          <td data-label="Devices" class="num">{{.Sessions}}</td>
+          <td class="cell-actions">
+            {{if ne .ID $.Data.SelfID}}
+            <div class="user-actions">
+              <form method="post" action="/admin/users/{{.ID}}/reset"><button type="submit" class="secondary small">Reset password</button></form>
+              {{if .Disabled}}
+              <form method="post" action="/admin/users/{{.ID}}/enable"><button type="submit" class="secondary small">Enable</button></form>
+              {{else}}
+              <form method="post" action="/admin/users/{{.ID}}/disable"><button type="submit" class="secondary small">Disable</button></form>
+              {{end}}
+              {{if .IsAdmin}}
+              <form method="post" action="/admin/users/{{.ID}}/demote"><button type="submit" class="secondary small">Remove admin</button></form>
+              {{else}}
+              <form method="post" action="/admin/users/{{.ID}}/promote"><button type="submit" class="secondary small">Make admin</button></form>
+              {{end}}
+              {{if .Sessions}}<form method="post" action="/admin/users/{{.ID}}/signout"><button type="submit" class="secondary small">Sign out everywhere</button></form>{{end}}
+              <a class="button secondary small danger-link" href="/admin/users/{{.ID}}/delete">Delete…</a>
+            </div>
+            {{else}}<span class="field-note">Manage yourself on <a href="/account">your account</a>.</span>{{end}}
+          </td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+  <p class="field-note">Times are in UTC.</p>
+</section>
+{{end}}
+</div>
+{{end}}

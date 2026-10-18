@@ -1,15 +1,49 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
-func TestAddr(t *testing.T) {
-	env := func(m map[string]string) func(string) (string, bool) {
-		return func(k string) (string, bool) { v, ok := m[k]; return v, ok }
+func env(m map[string]string) func(string) string {
+	return func(k string) string { return m[k] }
+}
+
+func TestLoadDefaults(t *testing.T) {
+	c, err := Load(env(nil))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := parse(env(nil)).Addr; got != ":8080" {
-		t.Errorf("default Addr = %q", got)
+	if c.Addr != ":8080" || c.HSTS || c.ShutdownTimeout != 10*time.Second || c.DBPath != "" || c.ClientIPHeader != "" {
+		t.Errorf("unexpected defaults: %+v", c)
 	}
-	if got := parse(env(map[string]string{"ADDR": "0.0.0.0:9000"})).Addr; got != "0.0.0.0:9000" {
-		t.Errorf("Addr = %q", got)
+}
+
+func TestLoadOverrides(t *testing.T) {
+	c, err := Load(env(map[string]string{
+		"ADDR": ":9000", "HSTS": "1", "SHUTDOWN_TIMEOUT": "3s",
+		"DB_PATH": "/data/x.db", "CLIENT_IP_HEADER": "CF-Connecting-IP",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Addr != ":9000" || !c.HSTS || c.ShutdownTimeout != 3*time.Second ||
+		c.DBPath != "/data/x.db" || c.ClientIPHeader != "CF-Connecting-IP" {
+		t.Errorf("overrides not applied: %+v", c)
+	}
+}
+
+// Every bad value is reported together, so an operator fixes a deployment in
+// one pass rather than one restart per mistake.
+func TestLoadReportsAllErrors(t *testing.T) {
+	_, err := Load(env(map[string]string{"HSTS": "yes", "SHUTDOWN_TIMEOUT": "-1s"}))
+	if err == nil {
+		t.Fatal("want error")
+	}
+	for _, want := range []string{"HSTS", "SHUTDOWN_TIMEOUT"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %s", err, want)
+		}
 	}
 }

@@ -14,6 +14,8 @@ import (
 type Policy struct {
 	StyleSrc []string
 	FontSrc  []string
+	// HSTS adds Strict-Transport-Security; see config.Config.HSTS.
+	HSTS bool
 }
 
 func newPolicy(list []fonts.Font) Policy {
@@ -62,6 +64,11 @@ func securityHeaders(p Policy, next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if p.HSTS {
+			// No preload: getting onto the list has a slow exit, and it is the
+			// operator's decision, not this project's.
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

@@ -1,0 +1,14 @@
+{{define "content"}}
+<div class="inner account">
+{{with .Data}}
+<section class="account-narrow">
+  <h1>Delete {{.User.Email}}?</h1>
+  <p>This deletes the account and all of its synced checked lines and ink, and signs it out on every device. It can't be undone. History still on their own devices is not touched.</p>
+  <form class="actions" method="post" action="/admin/users/{{.User.ID}}/delete">
+    <button type="submit" class="danger">Delete account</button>
+    <a class="button secondary" href="/admin/users">Cancel</a>
+  </form>
+</section>
+{{end}}
+</div>
+{{end}}

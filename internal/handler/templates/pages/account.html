@@ -1,0 +1,80 @@
+{{define "content"}}
+<div class="inner account">
+{{with .Data.SignIn}}
+<section class="account-narrow">
+  <h1>Sign in</h1>
+  <p>Signing in keeps your checked lines in step between this browser and the Italic practice iPad app. Accounts are created by the site's admin; there is no sign-up.</p>
+  {{if .Error}}<p class="notice error" role="alert">{{.Error}}</p>{{end}}
+  <form class="panel stack-form" method="post" action="/account/login">
+    {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username" required value="{{.Email}}"{{if not .Email}} autofocus{{end}}>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required{{if .Email}} autofocus{{end}}>
+    </div>
+    <div class="actions"><button type="submit">Sign in</button></div>
+  </form>
+  <p class="field-note">Practice works without an account too: history then stays in this browser only.</p>
+</section>
+{{end}}
+{{with .Data.Signed}}
+<h1>Account</h1>
+{{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}
+{{if .Error}}<p class="notice error" role="alert">{{.Error}}</p>{{end}}
+
+<section class="panel account-head" aria-labelledby="who-title">
+  <div>
+    <h2 id="who-title">{{.User.Email}}</h2>
+    <p class="field-note">Your checked lines sync to this account from the <a href="/progress">Progress</a> page and the iPad app.{{if .User.IsAdmin}} You are an admin.{{end}}</p>
+  </div>
+  <div class="actions">
+    {{if .User.IsAdmin}}<a class="button secondary" href="/admin/users">Manage accounts</a>{{end}}
+    <form method="post" action="/account/logout"><button type="submit" class="secondary">Sign out</button></form>
+  </div>
+</section>
+
+<section class="panel" aria-labelledby="devices-title">
+  <h2 id="devices-title">Signed-in devices</h2>
+  <div class="table-scroll">
+    <table class="data">
+      <thead><tr><th scope="col">Device</th><th scope="col">Signed in</th><th scope="col">Last used</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+      <tbody>
+      {{range .Sessions}}
+        <tr>
+          <td>{{if .Label}}{{.Label}}{{else if eq .Kind "device"}}An app{{else}}A browser{{end}}{{if eq .ID $.Data.Signed.CurrentID}} <strong>(this browser)</strong>{{end}}</td>
+          <td>{{when .CreatedAt}}</td>
+          <td>{{when .LastUsedAt}}</td>
+          <td><form method="post" action="/account/sessions/{{.ID}}/revoke"><button type="submit" class="secondary small">Sign out</button></form></td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel account-narrow" id="password" aria-labelledby="password-title">
+  <h2 id="password-title">Change password</h2>
+  <form class="stack-form" method="post" action="/account/password">
+    <input type="email" name="email" value="{{.User.Email}}" autocomplete="username" hidden>
+    <div class="field">
+      <label for="current">Current password</label>
+      <input id="current" name="current" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="field">
+      <label for="new">New password</label>
+      <input id="new" name="new" type="password" autocomplete="new-password" minlength="12" required aria-describedby="new-note">
+      <p id="new-note" class="field-note">At least 12 characters. A few unrelated words make a good one.</p>
+    </div>
+    <div class="field">
+      <label for="confirm">New password again</label>
+      <input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="12" required>
+    </div>
+    <div class="actions"><button type="submit">Change password</button></div>
+  </form>
+</section>
+{{end}}
+</div>
+{{end}}

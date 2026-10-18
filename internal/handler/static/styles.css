@@ -915,3 +915,124 @@ button.primary {
   svg { width: 1.6rem; height: 1.6rem; }
   &:not(:disabled) { color: var(--ink); }
 }
+
+/* ---- Accounts and sync ---------------------------------------------------- */
+
+.account { display: flex; flex-direction: column; gap: var(--gap-md); padding-bottom: var(--gap-lg); }
+.account h1, .account h2 { margin: 0; }
+.account h2 { font-size: 1.15rem; }
+.account p { margin: 0; }
+.account-narrow { max-width: 28rem; width: 100%; }
+section.account-narrow { display: flex; flex-direction: column; gap: var(--gap-md); }
+
+.notice {
+  padding: var(--gap-sm) var(--gap-md);
+  border-radius: var(--radius);
+  background: var(--paper-sunk);
+  border-left: 4px solid var(--accent);
+
+  &.warn { border-left-color: #a86d00; }
+  &.error { border-left-color: #b3261e; }
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: var(--gap-md);
+}
+
+.field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.field input:not([type="checkbox"]), .stack-form input:not([type="checkbox"]) {
+  min-height: var(--tap);
+  width: 100%;
+  padding: 0 var(--gap-sm);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font: inherit;
+  background: #fff;
+  color: var(--ink);
+}
+.field-note { margin: 0; font-size: 0.85rem; color: var(--ink-soft); max-width: 22rem; }
+.stack-form { display: flex; flex-direction: column; gap: var(--gap-md); }
+label.check { display: flex; align-items: center; gap: var(--gap-xs); min-height: var(--tap); }
+
+.account-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-md);
+
+  h2 { overflow-wrap: anywhere; }
+  .field-note { max-width: var(--measure); }
+}
+.actions { display: flex; flex-wrap: wrap; gap: var(--gap-sm); }
+.actions form { display: contents; }
+.admin-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--gap-md); flex-wrap: wrap; }
+
+button.secondary, a.button.secondary { background: var(--paper-sunk); }
+button.small, a.button.small { min-height: 2rem; padding: 0 var(--gap-sm); font-size: 0.85rem; }
+a.button {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  min-width: 4.5rem;
+  padding: 0 var(--gap-md);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fff;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+a.button.small { min-height: 2rem; }
+button.danger { background: #b3261e; border-color: #b3261e; color: #fff; }
+a.danger-link { color: #b3261e; }
+.status-off { color: #b3261e; font-weight: 600; }
+
+.table-scroll { overflow-x: auto; }
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+
+  th, td { padding: var(--gap-xs) var(--gap-sm); text-align: left; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  th { color: var(--ink-soft); font-weight: 600; }
+  .num { text-align: right; }
+}
+.user-actions { display: flex; flex-wrap: wrap; gap: var(--gap-xs); }
+.user-actions form { display: contents; }
+.secret {
+  margin: 0;
+  font-size: 1.35rem;
+  overflow-wrap: anywhere;
+
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; user-select: all; }
+}
+
+/* Phones: each account becomes a card, so its actions are on screen rather
+   than at the far end of a sideways-scrolling table. */
+@media (max-width: 40rem) {
+  table.admin-users {
+    thead { display: none; }
+    tbody, tr, td { display: block; }
+    tr { padding: var(--gap-sm) 0; border-bottom: 1px solid var(--rule); }
+    td, td.num { border: 0; padding: 0.15rem 0; white-space: normal; text-align: left; }
+    td[data-label]::before { content: attr(data-label) ": "; color: var(--ink-soft); }
+    .cell-email { font-weight: 600; overflow-wrap: anywhere; }
+    .cell-actions { padding-top: var(--gap-xs); }
+  }
+}
+
+/* The Progress page's Sync card. */
+.sync-card {
+  margin-top: var(--gap-md);
+  max-width: var(--measure);
+
+  h2 { font-size: 1.15rem; margin: 0 0 var(--gap-xs); }
+  p { margin: 0 0 var(--gap-sm); color: var(--ink-soft); }
+}
+.sync-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-sm); margin: 0 0 var(--gap-sm); }
+.sync-line[hidden] { display: none; }
