@@ -36,6 +36,8 @@ const full = 0.04 * S;
 const zero = 0.2 * S;
 
 export interface LetterResult {
+  /** The model character's index (by code point) in the line's text. */
+  index: number;
   char: string;
   score: number;
   /** How closely the writing follows the model's centreline, 0–1. */
@@ -72,6 +74,85 @@ export interface CheckResult {
   overlay: () => HTMLCanvasElement;
   /** Analysis-space frame, for drawing the overlay on a band. */
   frame: { uMin: number; vTop: number; tan: number };
+  /** Where each model character starts in analysis columns, matched to the writing (one more than characters). */
+  userBounds: number[];
+  /** What the metrics (metrics.ts) need, computed in the same pass (see the iPad repo's docs/metrics.md). */
+  detail: CheckDetail;
+}
+
+/**
+ * Per-point and per-letter measurements `check` already has in hand. Letter
+ * arrays are aligned with `letters`; NaN means "not measurable".
+ */
+export interface CheckDetail {
+  /** For each stroke, each point: distance to the model's centreline after letter alignment, in x-heights. */
+  pointDist: number[][];
+  /** Per letter: user x-height / model x-height, for letters in the x-height band with > 5 samples. */
+  letterSize: number[];
+  /** Per letter: (user bottom - model bottom) in x-heights, same letters. */
+  letterBottom: number[];
+  /** Per letter: the model skeleton's left and right edge, x-heights in the model's deslanted frame. */
+  modelLeft: number[];
+  modelRight: number[];
+  /** Per letter: pieces of the model skeleton with at least `minPieceFraction * S` pixels. */
+  components: number[];
+}
+
+/** Smallest skeleton piece that counts, as a fraction of S pixels. */
+export const minPieceFraction = 0.3;
+
+/**
+ * Connected pieces (8-neighbour, joined only within one letter) of the
+ * skeleton per entry of `letters` (model character indices). A pixel belongs
+ * to the letter of its column; pieces under `minPieceFraction * S` pixels
+ * (dots, serifs, stray spurs) do not count.
+ */
+export function skeletonComponentCounts(
+  skel: Raster,
+  letterOfColumn: (x: number) => number,
+  letters: number[],
+): number[] {
+  const { w: W, h: H } = skel;
+  const parent = new Int32Array(W * H).fill(-1);
+  for (let i = 0; i < W * H; i++) if (skel.data[i]) parent[i] = i;
+  const find = (a: number) => {
+    let r = a;
+    while (parent[r] !== r) r = parent[r];
+    let c = a;
+    while (parent[c] !== r) {
+      const n = parent[c];
+      parent[c] = r;
+      c = n;
+    }
+    return r;
+  };
+  const col = Array.from({ length: W }, (_, x) => letterOfColumn(x));
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (parent[y * W + x] < 0) continue;
+      for (const [dx, dy] of [[1, 0], [-1, 1], [0, 1], [1, 1]]) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || xx >= W || yy >= H || parent[yy * W + xx] < 0 || col[xx] !== col[x]) continue;
+        const a = find(y * W + x), b = find(yy * W + xx);
+        if (a !== b) parent[a] = b;
+      }
+    }
+  }
+  const size = new Map<number, number>();
+  for (let i = 0; i < W * H; i++) {
+    if (parent[i] >= 0) {
+      const r = find(i);
+      size.set(r, (size.get(r) ?? 0) + 1);
+    }
+  }
+  const perLetter = new Map<number, number>();
+  for (const [root, n] of size) {
+    if (n >= minPieceFraction * S) {
+      const l = col[root % W];
+      perLetter.set(l, (perLetter.get(l) ?? 0) + 1);
+    }
+  }
+  return letters.map((l) => perLetter.get(l) ?? 0);
 }
 
 /**
@@ -343,6 +424,7 @@ export function checkWithModel(raster: ModelRaster, strokes: Stroke[]): CheckRes
   }
   const modelToUser = chars.map(() => [] as number[]);
   const modelTop = chars.map(() => Infinity), modelBottom = chars.map(() => -Infinity);
+  const modelLeftPx = chars.map(() => NaN), modelRightPx = chars.map(() => NaN);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       if (!modelSkel.data[y * W + x]) continue;
@@ -351,24 +433,34 @@ export function checkWithModel(raster: ModelRaster, strokes: Stroke[]): CheckRes
       const i = letterOf(x);
       modelTop[i] = Math.min(modelTop[i], y);
       modelBottom[i] = Math.max(modelBottom[i], y);
+      modelLeftPx[i] = Number.isNaN(modelLeftPx[i]) ? x : Math.min(modelLeftPx[i], x);
+      modelRightPx[i] = Number.isNaN(modelRightPx[i]) ? x : Math.max(modelRightPx[i], x);
       modelToUser[i].push(dtUser[y * W + x]);
     }
   }
 
   const letters: LetterResult[] = [];
   const sizes: number[] = [], widths: number[] = [], baselines: number[] = [];
+  const letterSize: number[] = [], letterBottom: number[] = [];
+  const modelLeft: number[] = [], modelRight: number[] = [], letterCols: number[] = [];
   chars.forEach((char, i) => {
     // A space isn't a letter, even when a neighbour's swash (a joined f's
     // descender, say) reaches into its slot.
     if (/\s/.test(char) || modelToUser[i].length === 0) return;
     const s = scoreLetter(userToModel[i], modelToUser[i], full, zero);
     letters.push({
+      index: i,
       char,
       score: s.score,
       precision: s.precision,
       coverage: s.coverage,
       missing: s.missing,
     });
+    letterSize.push(NaN);
+    letterBottom.push(NaN);
+    modelLeft.push(modelLeftPx[i] / S);
+    modelRight.push(modelRightPx[i] / S);
+    letterCols.push(i);
     if (s.missing) return;
     const modelWidth = bounds[i + 1] - bounds[i];
     if (modelWidth > 0.2 * S) {
@@ -380,6 +472,8 @@ export function checkWithModel(raster: ModelRaster, strokes: Stroke[]): CheckRes
     if (bodyOnly && userToModel[i].length > 5) {
       sizes.push((Yb - userTop[i]) / (Yb - modelTop[i]));
       baselines.push((userBottom[i] - modelBottom[i]) / S);
+      letterSize[letterSize.length - 1] = sizes[sizes.length - 1];
+      letterBottom[letterBottom.length - 1] = baselines[baselines.length - 1];
     }
   });
   if (letters.length === 0) return null;
@@ -394,13 +488,21 @@ export function checkWithModel(raster: ModelRaster, strokes: Stroke[]): CheckRes
     baseline: median(baselines),
   };
 
-  const pointClass = strokes.map((s) =>
-    s.points.map((p) => {
-      const d = at(dtModel, toModelX(toX(p.u, p.v)), toY(p.v));
-      // Green with full credit, amber while some credit remains, red beyond.
-      return d <= full * 1.5 ? 0 : d <= zero ? 1 : 2;
-    })
+  const pointDistPx = strokes.map((s) =>
+    s.points.map((p) => at(dtModel, toModelX(toX(p.u, p.v)), toY(p.v)))
   );
+  // Green with full credit, amber while some credit remains, red beyond.
+  const pointClass = pointDistPx.map((ds) =>
+    ds.map((d) => d <= full * 1.5 ? 0 : d <= zero ? 1 : 2)
+  );
+  const detail: CheckDetail = {
+    pointDist: pointDistPx.map((ds) => ds.map((d) => d / S)),
+    letterSize,
+    letterBottom,
+    modelLeft,
+    modelRight,
+    components: skeletonComponentCounts(modelSkel, letterOf, letterCols),
+  };
 
   // The overlay, in the user's (deslanted) frame: for each column the user
   // wrote in, the model column it was matched to, so the ghost letters sit
@@ -445,6 +547,8 @@ export function checkWithModel(raster: ModelRaster, strokes: Stroke[]): CheckRes
     pointClass,
     overlay: makeOverlay,
     frame: { uMin, vTop, tan },
+    userBounds,
+    detail,
   };
 }
 
@@ -537,9 +641,9 @@ function plot(w: number, h: number, pts: Array<[number, number]>): Raster {
  * length-weighted median over straight, steep, downward stretches at least
  * 0.4 x-height long. Curves (arches, bowls) are left out, because their
  * chords lean whichever way the curve happens to turn. NaN when there are
- * too few straight stretches to judge.
+ * too few straight stretches to judge (total length under `minWeight`).
  */
-export function strokeSlant(strokes: Stroke[]): number {
+export function strokeSlant(strokes: Stroke[], minWeight = 0.8): number {
   const found: Array<[angle: number, weight: number]> = [];
   for (const s of strokes) {
     const pts = s.points;
@@ -567,7 +671,7 @@ export function strokeSlant(strokes: Stroke[]): number {
     }
   }
   const total = found.reduce((a, [, w]) => a + w, 0);
-  if (total < 0.8) return NaN;
+  if (total < minWeight) return NaN;
   found.sort((a, b) => a[0] - b[0]);
   let acc = 0;
   for (const [angle, w] of found) {

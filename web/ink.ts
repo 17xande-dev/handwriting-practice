@@ -23,12 +23,20 @@ export interface Point {
   /** Pencil altitude and azimuth in radians, when the browser reports them. */
   alt?: number;
   az?: number;
+  /** Barrel roll in radians, in [-PI, PI) (the iPad's `roll`), when the browser reports a twist. */
+  roll?: number;
+  /** The Pencil's pressure when the browser reported a real one; only says "a Pencil, not a finger", not stored in ink records. */
+  force?: number;
 }
 
 export interface Stroke {
   /** The pen in use when the stroke was written; later changes don't restyle it. */
   pen: Pen;
   points: Point[];
+  /** The edged nib followed the barrel roll while this stroke was written (never on the web: the nib angle is a setting). */
+  followsRoll?: boolean;
+  /** Roll reference in radians for a nib that follows the roll; absent: the roll of the first point. */
+  rollRef?: number;
 }
 
 /** Monoline width in x-heights for a weight setting of 1–5. */
