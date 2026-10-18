@@ -13,7 +13,14 @@ make run ADDR=0.0.0.0:8083    # reachable from an iPad on the same network
 ```
 
 Then open `http://<this machine's LAN IP>:8083` in Safari on the iPad. Pointer
-Events need no secure context, so plain HTTP on the LAN is fine.
+Events need no secure context, so plain HTTP on the LAN is fine for writing.
+Signing in (see "Accounts and sync") needs HTTPS or `http://localhost`, because
+the session cookie is `Secure`.
+
+The server needs `DB_PATH`, a SQLite file for accounts and synced history;
+`make run` defaults it to `~/.local/share/handwriting/handwriting.db`
+(`make run DB_PATH=...` to change it). Create the first admin with
+`DB_PATH=... go run . -add-admin you@example.com`.
 
 `make check` is the gate before a commit: gofmt, `deno fmt`/`lint`/`check`,
 `go vet`, a stale-bundle check, and every test. `make up` runs it in Docker.
@@ -28,7 +35,11 @@ change the TypeScript: the bundle is checked in, so `go build` alone works.
 | `main.go` | Wiring and graceful shutdown |
 | `internal/config` | Every environment variable, parsed into one struct |
 | `internal/sheets` | The built-in worksheets |
-| `internal/handler` | Routes, templates, embedded static files, security headers |
+| `internal/handler` | Routes, templates, embedded static files, security headers, the account and admin pages, `/api` |
+| `internal/account`, `internal/auth` | Users and sessions in SQLite; argon2id and token hashing |
+| `internal/history` | The synced `check` and `ink` records |
+| `internal/db` | SQLite, numbered migrations, daily backups |
+| `internal/middleware` | Rate limiting, client IP, request log |
 | `web/` | TypeScript source for the drawing surface, bundled to `internal/handler/static/app.js` |
 
 ### Pencil input
@@ -155,7 +166,9 @@ disagree, as with looped scripts; then the slider (−20° to 30°, since some
 hands lean back) sets it by eye. The chosen font and slant are remembered on
 the device.
 
-`ADDR` (default `:8083` with `make run`; the container uses `:8080`, published on 8083) is the only environment variable.
+Environment variables (`internal/config` is the complete list): `ADDR` (default `:8083`
+with `make run`; the container uses `:8080`, published on 8083 by `compose.local.yaml`),
+`DB_PATH`, `HSTS` and `CLIENT_IP_HEADER`, described under "Accounts and sync".
 
 The Content-Security-Policy is built from the catalogue, plus Google Fonts'
 two origins for the picker: `style-src` and `font-src` allow those and
@@ -253,11 +266,9 @@ The chart colours (one blue, one context grey) were checked with the dataviz
 palette validator. The grey is below 3:1 contrast on white, which is why the
 tables are always there.
 
-**Storage.** For now the history is in the browser's IndexedDB
-(`web/progress-store.ts`). Nothing is sent to the server and there are no
-accounts. Everything goes through a `ProgressStore` interface, so a
-server-backed store with accounts can replace it without the pages changing.
-Safari can clear a site's storage after a period without use, so the page
+**Storage.** The history is in the browser's IndexedDB
+(`web/progress-store.ts`), which stays the source of truth; nothing is sent
+anywhere unless you sign in (see "Accounts and sync"). Safari can clear a site's storage after a period without use, so the page
 offers **Save a backup** (a JSON file) and **Restore a backup**. A restore
 merges, skips lines already present, and validates every entry, since the
 file comes from outside. Adding the app to the Home Screen also keeps its
@@ -267,6 +278,61 @@ storage.
 into its own `progress.js`, loaded only on the progress page: 178 KB
 minified, 62 KB gzipped. Web Awesome was considered, but it has no chart
 components.
+
+### Accounts and sync
+
+Accounts keep the history in step between browsers and the iPad app. There is
+no sign-up: an admin creates each account at `/admin/users` (a password is
+generated and shown once), and the first admin comes from the command line:
+
+```sh
+docker compose exec server /calligraphy -add-admin you@example.com
+docker compose exec server /calligraphy -reset-password you@example.com
+```
+
+Both print a generated password once. Everything else about people (reset,
+disable, make admin, sign out everywhere, delete) is on `/admin/users`;
+signed-in people change their own password and see and sign out their
+devices at `/account`.
+
+- **Sessions** are a table holding only the sha256 of an opaque token: the
+  `hp_session` cookie in a browser, a bearer token from `POST /api/token` for
+  the iPad. Passwords are argon2id (12 characters minimum, nothing else). Every
+  endpoint that verifies a password is rate-limited (five tries per email, then
+  one a minute, plus a per-IP ceiling), and a failed sign-in costs the same
+  whatever the cause.
+- **Cookie.** `Secure`, `HttpOnly`, `SameSite=Lax`. Browsers accept a `Secure`
+  cookie from `https://` and from `http://localhost`, so local development
+  works; a plain-HTTP LAN address cannot sign in on the web (the app can).
+- **State changes** pass `http.CrossOriginProtection`, the CSRF defence for the
+  forms and the API alike. The strict CSP is unchanged: no inline styles or
+  scripts, and a test checks the account and admin pages for them.
+- **Sync** is `POST /api/sync` with a cursor, tombstones and two record kinds,
+  `check` (one checked line) and `ink` (the quantized strokes of an attempt;
+  the web does not write these yet, but stores and syncs them). The contract,
+  record shapes and the record-id rule are in [`docs/sync-api.md`](docs/sync-api.md);
+  the iPad app's brief is [`docs/ipad-sync-handoff.md`](docs/ipad-sync-handoff.md).
+  The web client (`web/sync.ts`) syncs on page load, when the tab becomes
+  visible or the network returns, a few seconds after a check, and from the
+  Sync card on Progress. The first time it sees a signed-in browser it offers to
+  upload the checks already on the device. Signed out, nothing changes.
+
+**Deploying.** `compose.yaml` runs the one container with a named `data` volume
+at `/data` (`DB_PATH=/data/handwriting.db`; a daily `VACUUM INTO` backup lands
+in `/data/backups`, the last seven kept). Put it behind your reverse proxy,
+which terminates TLS. Two environment variables depend on the proxy:
+`HSTS=1` once the site is served over https (never before: it pins the
+browser), and `CLIENT_IP_HEADER` (for example `X-Forwarded-For` or
+`X-Real-IP`) so the per-IP sign-in limit sees visitors, not the proxy. Only set
+it when every request arrives through that proxy, or anyone can pick their own
+rate-limit bucket. Left empty it uses the connection's address. The
+distroless image has no shell, so the healthcheck is the binary probing
+itself (`/calligraphy -healthcheck`). It is one instance on one SQLite file:
+a second instance is the point at which this needs Postgres. The off-box
+copy of `/data/backups` is a decision still open. `make build` and `go run`
+need cgo (SQLite); the Dockerfile builds a static musl binary and, because
+the TypeScript bundles are checked in and `make check` fails when they are
+stale, has no Deno stage.
 
 ### Your own text
 
@@ -286,6 +352,8 @@ the form isn't empty next time. There is no sharing, by design.
   `on*=` handlers and no inline scripts, and a test checks every served page
   for them. The font families reach CSS through a generated, content-hashed
   `font.css`, not inline styles.
+- Accounts, sessions, rate limits and the cross-origin check are described under
+  "Accounts and sync".
 - `/static` serves only extensions in an explicit allow-list, at
   content-hashed URLs cached as immutable. An unhashed or stale URL must
   revalidate.
@@ -297,11 +365,12 @@ the form isn't empty next time. There is no sharing, by design.
 | Sharing a custom exercise | A server-stored exercise behind an unguessable id, perhaps with an owner | Wanting to send an exercise to someone. Putting the text in the URL was rejected (see "Your own text"). |
 | Timed writing | A one-minute mode recording letters per minute in Progress, after Getty-Dubay's *Write Now* | Wanting to build speed once the forms are settled |
 | Judging stroke order and direction | Comparing against hand-authored stroke paths per letter | Wanting feedback on how letters are made, not just their shape |
-| Progress on a server, with accounts | A server `ProgressStore` (SQLite) behind sign-in | Wanting history across devices, or safe from Safari clearing storage |
+| Off-box backups of the SQLite file | Copy `/data/backups` elsewhere (rsync, restic, the Proxmox backup of the volume) | Wanting history to survive losing the Docker host. Accounts and sync are done (see "Accounts and sync"). |
+| A second server instance | Postgres instead of the SQLite file | Running two instances or rolling deploys with overlap |
 | Fonts from outside Google | Self-hosted or other font services | Wanting a font Google doesn't have. The picker is Google-only so the CSP stays at two fixed origins. |
 | Stroke-order models | Hand-authored SVG paths per letter | Wanting animated stroke order or direction arrows, which a font can't give |
 | Getty-Dubay proportions | Fixed guide ratios instead of the font's measured ones | A model font whose proportions stray from the hand |
-| htmx / Web Awesome | Add when a server round-trip or a complex control needs them | Saving or account features. v1 has neither. |
+| htmx / Web Awesome | Add when a server round-trip or a complex control needs them | Still not needed: the account and admin pages are plain post-redirect-get forms. |
 | Dark mode | Ink and guide colours for a dark page | Requests for it. The page imitates paper, so it's light only for now. |
 
 ## Licence
