@@ -634,6 +634,9 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, b: Band, r: CheckResu
   // Analysis (deslanted) pixels → band pixels: undo the shear, then scale.
   ctx.transform(k, 0, -tan * k, k, b.left + b.xh * (uMin - vTop * tan), b.baseline + b.xh * vTop);
   ctx.imageSmoothingEnabled = true;
+  // Raster pixel i covers [i, i+1) but analysis pixel centres are the
+  // integers, so shift half a pixel for the ghost to sit exactly under the ink.
+  ctx.translate(-0.5, -0.5);
   ctx.drawImage(r.overlay(), 0, 0);
   ctx.restore();
 }
