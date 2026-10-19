@@ -680,6 +680,31 @@ button.primary {
   touch-action: none;
 }
 
+/* Stroke aids: the model-line canvas takes taps only while "Show strokes" is on; the
+   trace-first guide lies over the practice line and never takes the pen. */
+.reference canvas.aids { pointer-events: none; }
+.reference canvas.aids.live { pointer-events: auto; cursor: pointer; }
+.practice canvas.guide {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.stroke-aids {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm) var(--gap-md);
+  margin-top: var(--gap-sm);
+
+  .toggle { min-height: var(--tap); }
+  .stroke-aids-note { font-size: 0.85rem; color: var(--ink-soft); }
+}
+
+.play-strokes[aria-pressed="true"] { background: var(--paper-sunk); }
+.letter.playable { cursor: pointer; }
+
 .replay-controls {
   display: flex;
   flex-wrap: wrap;

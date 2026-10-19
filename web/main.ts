@@ -60,6 +60,12 @@ function main() {
     },
     modelInk: cssVar("--model-ink", "#222"),
     penInk: cssVar("--pen-ink", "#123"),
+    aids: {
+      aid: cssVar("--accent", "#1f3a5f"),
+      demo: cssVar("--pen-ink", "#123"),
+      guide: cssVar("--accent", "#1f3a5f"),
+      paper: cssVar("--paper", "#fbf8f1"),
+    },
   };
 
   const toolbar = new Toolbar(form);
@@ -102,10 +108,13 @@ function main() {
     const s = toolbar.read();
     await strokeModels.refresh();
     const l = await strokeModels.lookup(s.model, s.model === "custom" ? customLoaded : "");
-    if (ticket === lookupTicket) strokeLookup = l;
+    if (ticket !== lookupTicket) return;
+    strokeLookup = l;
+    for (const r of rows) r.refreshAids();
   };
   for (const r of rows) r.strokeLookup = () => strokeLookup;
   void refreshLookup();
+  attachStrokeAids(rows);
   // Definitions edited on the Stroke models page (another tab) or synced from another device.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void refreshLookup();
@@ -284,6 +293,36 @@ function keepWriting(rows: Row[], sheet: string, store: DeviceStore) {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flush();
   });
+}
+
+/**
+ * "Show strokes" (numbered start dots and arrows on the model, a Play button and a tap on a letter
+ * for the demo) and "Trace first" (the strokes still to write, faint, on the practice line). Both are
+ * remembered on this device.
+ */
+function attachStrokeAids(rows: Row[]) {
+  const show = document.getElementById("show-strokes");
+  const trace = document.getElementById("trace-first");
+  if (!(show instanceof HTMLInputElement) || !(trace instanceof HTMLInputElement)) return;
+  const key = "italic-practice:stroke-aids";
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) ?? "{}");
+    show.checked = saved?.show === true;
+    trace.checked = saved?.trace === true;
+  } catch {
+    // Nothing remembered.
+  }
+  const apply = () => {
+    for (const r of rows) r.setAids(show.checked, trace.checked);
+    try {
+      localStorage.setItem(key, JSON.stringify({ show: show.checked, trace: trace.checked }));
+    } catch {
+      // Not remembered.
+    }
+  };
+  show.addEventListener("change", apply);
+  trace.addEventListener("change", apply);
+  apply();
 }
 
 /**

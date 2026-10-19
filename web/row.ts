@@ -15,6 +15,7 @@ import { attachPen, type Sample } from "./pen.ts";
 import { eraserTolerance, strokesHit, type UV } from "./eraser.ts";
 import type { Settings } from "./settings.ts";
 import { fingerprint, type Recorded } from "./stroke-store.ts";
+import { type AidColors, StrokeAidsView } from "./stroke-aids-view.ts";
 import {
   flagSymbol,
   flagTitle,
@@ -27,6 +28,7 @@ export interface Theme {
   guides: GuideColors;
   modelInk: string;
   penInk: string;
+  aids: AidColors;
 }
 
 interface Surface {
@@ -82,6 +84,10 @@ export class Row {
   /** The Details panel is open. */
   #details = false;
   #replay: Replay;
+  /** Start dots, arrows, the demo and the trace-first guide (stroke order's teaching aids). */
+  #aidsView: StrokeAidsView;
+  #play: HTMLButtonElement;
+  #showAids = false;
   #replaySurface: Surface;
   #replaying = false;
   #replayMode: ReplayMode = "ink";
@@ -158,6 +164,28 @@ export class Row {
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") this.#replay.stop();
     });
+    this.#aidsView = new StrokeAidsView(
+      el.querySelector(".reference") as HTMLElement,
+      el.querySelector(".practice") as HTMLElement,
+      theme.aids,
+    );
+    this.#play = document.createElement("button");
+    this.#play.type = "button";
+    this.#play.className = "icon-button play-strokes";
+    this.#play.hidden = true;
+    this.#play.setAttribute("aria-pressed", "false");
+    this.#play.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg><span class="label">Play</span>';
+    this.#play.addEventListener("click", () => {
+      if (this.#aidsView.playing) this.#aidsView.stop();
+      else this.#aidsView.play();
+    });
+    this.#aidsView.onPlaying = (on) => {
+      this.#play.setAttribute("aria-pressed", String(on));
+      const l = this.#play.querySelector(".label");
+      if (l) l.textContent = on ? "Stop" : "Play";
+    };
+    el.querySelector(".row-actions")?.prepend(this.#play);
     this.#clear = el.querySelector('[data-action="clear"]') as HTMLButtonElement;
     this.#check = el.querySelector('[data-action="check"]') as HTMLButtonElement;
     this.#resultEl = el.querySelector(".check-result") as HTMLElement;
@@ -293,6 +321,17 @@ export class Row {
     this.#ref.ctx.fillStyle = this.#theme.modelInk;
     this.#ref.ctx.textBaseline = "alphabetic";
     this.#ref.ctx.fillText(this.#text, b.left, b.baseline);
+    // Where each letter's advance starts, in x-heights, for the stroke aids (the model's own advances).
+    const starts: number[] = [];
+    let prefix = "";
+    for (const ch of this.#text) {
+      starts.push(this.#ref.ctx.measureText(prefix).width / b.xh);
+      prefix += ch;
+    }
+    starts.push(this.#ref.ctx.measureText(this.#text).width / b.xh);
+    this.#aidsView.layout(b, font.slant, this.#text, starts);
+    this.#aidsView.setWritten(this.#strokes);
+    this.#syncPlay();
 
     this.#rebuildBase();
     this.#draw();
@@ -306,6 +345,24 @@ export class Row {
     if (s.roll !== undefined) p.roll = s.roll;
     if (s.force !== undefined) p.force = s.force;
     return p;
+  }
+
+  /** The stroke models changed (a font, a definition, a sync): the aids follow. */
+  refreshAids() {
+    this.#aidsView.setLookup(this.strokeLookup());
+    this.#syncPlay();
+  }
+
+  /** "Show strokes" and "Trace first" (the sheet's two toggles). */
+  setAids(show: boolean, trace: boolean) {
+    this.#showAids = show;
+    this.#aidsView.setShow(show);
+    this.#aidsView.setTrace(trace);
+    this.#syncPlay();
+  }
+
+  #syncPlay() {
+    this.#play.hidden = !(this.#showAids && this.#aidsView.available);
   }
 
   /** The line's text, its score if checked, for the sheet summary. */
@@ -471,6 +528,12 @@ export class Row {
       const order = judged?.get(l.index);
       const flags = order ? letterFlags(order) : [];
       if (flags.length) {
+        // Tap a flagged letter to see how the model writes it.
+        li.classList.add("playable");
+        li.addEventListener("click", () => {
+          const i = this.#aidsView.letterOfIndex(l.index);
+          if (i !== null) this.#aidsView.play(i);
+        });
         const fl = document.createElement("span");
         fl.className = "letter-flags";
         for (const f of flags) {
@@ -610,6 +673,7 @@ export class Row {
     this.#clearResult();
     // Exposed for tests and the browser console; not used by the app itself.
     this.#practice.canvas.dataset.strokes = String(n);
+    this.#aidsView.setWritten(this.#strokes);
     this.#rebuildBase();
     this.#draw();
     if (!this.#restoring) this.onStrokes(this.#strokes);
