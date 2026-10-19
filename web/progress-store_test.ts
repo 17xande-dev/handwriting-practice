@@ -117,6 +117,17 @@ Deno.test("queueAdds and queueDeletes keep the queues free of repeats", () => {
   assertEquals(s.pendingDeletes, [{ kind: "check", id: "1" }]);
 });
 
+Deno.test("queueAdds cancels a pending delete of the same record that was never sent", () => {
+  const s = freshSyncState("a@b.c");
+  queueDeletes(s, [{ kind: "check", id: "1" }, { kind: "ink", id: "1-ink" }, {
+    kind: "check",
+    id: "2",
+  }]);
+  queueAdds(s, [{ kind: "check", id: "1" }, { kind: "ink", id: "1-ink" }]);
+  assertEquals(s.pendingAdds, [{ kind: "check", id: "1" }, { kind: "ink", id: "1-ink" }]);
+  assertEquals(s.pendingDeletes, [{ kind: "check", id: "2" }]);
+});
+
 Deno.test("sync state survives only when well formed", () => {
   assertEquals(parseSyncState(null), null);
   assertEquals(parseSyncState({ email: "a@b.c" }), null);

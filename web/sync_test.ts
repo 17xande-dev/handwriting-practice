@@ -389,6 +389,57 @@ Deno.test("a response that arrives after sign-out and sign-in again is thrown aw
   assertFalse(store.checks.some((c) => c.id === "stale"));
 });
 
+Deno.test("a sync after a sign-out and sign-in mid-request starts its own round", async () => {
+  const store = syncedStore();
+  store.add(check());
+  let release!: () => void;
+  const gate = new Promise<void>((r) => release = r);
+  const srv = fakeServer(
+    async () => {
+      await gate; // the first request stays out while the person signs out and in again
+      return json(answer({ cursor: 99 }));
+    },
+    () => json(answer({ cursor: 2 })),
+  );
+  const first = sync(store, srv.f);
+  await store.disableSync();
+  await store.enableSync("a@example.com");
+  store.add(check());
+  const second = sync(store, srv.f); // must not join the abandoned round
+  assertEquals(await second, { status: "ok", changed: false });
+  assertEquals(srv.calls.length, 2);
+  assertEquals(store.state!.cursor, 2);
+  release();
+  assertEquals(await first, { status: "off" });
+  assertEquals(store.state!.cursor, 2); // the abandoned reply changed nothing
+  // And the slot is free for the next sync.
+  const third = fakeServer(() => json(answer()));
+  store.add(check());
+  assertEquals(await sync(store, third.f), { status: "ok", changed: false });
+  assertEquals(third.calls.length, 1);
+});
+
+Deno.test("restoring after a clear, before the next sync, does not send the delete", async () => {
+  const store = syncedStore();
+  const a = store.add(check());
+  store.updateSync((s) => {
+    s.pendingAdds = [];
+  }); // already synced
+  const backup = [structuredClone(a)];
+  store.clear();
+  assertEquals(store.state!.pendingDeletes, [{ kind: "check", id: a.id }]);
+  // Restore: the same merge-and-queue path the store uses.
+  const { fresh } = planMerge(store.checks, backup);
+  store.checks.push(...fresh);
+  store.updateSync((s) => queueAdds(s, fresh.map((r) => ({ kind: "check", id: r.id }))));
+  assertEquals(store.state!.pendingDeletes, []);
+  const srv = fakeServer(() => json(answer()));
+  assertEquals(await sync(store, srv.f), { status: "ok", changed: false });
+  assertEquals(srv.calls[0].deleted, []);
+  assertEquals(srv.calls[0].push.check.map((r) => r.id), [a.id]);
+  assertEquals(store.checks.map((c) => c.id), [a.id]);
+});
+
 Deno.test("two syncs at once share one request", async () => {
   const store = syncedStore();
   store.add(check());

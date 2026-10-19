@@ -327,8 +327,16 @@ export function planMerge(
 
 export const entryKey = (e: SyncEntry): string => `${e.kind}:${e.id}`;
 
-/** Queue new records for the next sync. */
+/**
+ * Queue new records for the next sync. A not-yet-sent deletion of the same
+ * record is dropped: the record is back (restored after Clear history, before
+ * the next sync), so the delete, which never reached the server, must not take
+ * it away again. (A delete that was already sent is a tombstone at the server,
+ * which wins for that id.)
+ */
 export function queueAdds(s: SyncState, entries: SyncEntry[]): void {
+  const back = new Set(entries.map(entryKey));
+  s.pendingDeletes = s.pendingDeletes.filter((e) => !back.has(entryKey(e)));
   const have = new Set(s.pendingAdds.map(entryKey));
   for (const e of entries) {
     if (!have.has(entryKey(e))) s.pendingAdds.push(e);

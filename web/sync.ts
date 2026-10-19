@@ -41,15 +41,24 @@ export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
 const defaultFetch: FetchFn = (input, init) => globalThis.fetch(input, init);
 
-let running: Promise<SyncResult> | null = null;
+let running: { promise: Promise<SyncResult>; generation: number } | null = null;
 
 /**
  * Sync now. Two syncs never overlap: a call while one is running gets that
  * one's result (it also picks up anything queued meanwhile, see `rounds`).
+ *
+ * The exception is a round that started under an older sign-in (the store's
+ * generation has moved since): its result will be "off" and it writes
+ * nothing, so a call made after the sign-in must not join it. It starts a
+ * round of its own, and the old one cannot free the new one's slot.
  */
 export function sync(store: SyncStore, f: FetchFn = defaultFetch): Promise<SyncResult> {
-  running ??= rounds(store, f).finally(() => running = null);
-  return running;
+  if (running && running.generation === store.generation) return running.promise;
+  const promise: Promise<SyncResult> = rounds(store, f).finally(() => {
+    if (running?.promise === promise) running = null;
+  });
+  running = { promise, generation: store.generation };
+  return promise;
 }
 
 /** How much one request may carry; a 413 halves it for the rest of the sync. */
