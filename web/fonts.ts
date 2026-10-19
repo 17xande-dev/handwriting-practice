@@ -21,6 +21,7 @@ import {
 } from "./favourites.ts";
 import { familyList, loadPreviewFont, validFamilyName } from "./googlefont.ts";
 import { DeviceStore } from "./progress-store.ts";
+import { installSync } from "./sync-triggers.ts";
 import { StrokeModels } from "./stroke-lookup.ts";
 import { userGlyphs } from "./stroke-defs.ts";
 import {
@@ -56,6 +57,17 @@ function main() {
   if (!root) return;
   const groups: CatalogGroup[] = catalogFromDocument();
   let rec: FavouritesRecord = loadRecord(groups);
+  const store = new DeviceStore();
+  // Signed in, the favourites are a `prefs` record: synced after every edit, and a newer one from
+  // another device replaces this list (greater ts wins).
+  const syncer = installSync(store, {
+    onResult: (r) => {
+      if (r.status === "ok" && r.changed) {
+        rec = loadRecord(groups);
+        renderFavourites();
+      }
+    },
+  });
   /** Stroke coverage in whole percent, by "builtin:<font id>" or "google:<family>"; absent means none. */
   const coverage = new Map<string, number>();
   const googleNames = new Set<string>();
@@ -145,7 +157,6 @@ function main() {
 
   async function loadCoverage() {
     try {
-      const store = new DeviceStore();
       const models = new StrokeModels(store);
       await models.refresh();
       const records = await store.allStrokesRecords();
@@ -236,7 +247,8 @@ function main() {
   function edit(next: FavouritesRecord) {
     if (next === rec) return;
     rec = next;
-    persist(rec);
+    // Kept in localStorage and queued for sync (nothing is sent while signed out).
+    void store.saveFavourites(rec).then(() => syncer.now()).catch(() => saveRecord(rec));
   }
 
   {
@@ -393,11 +405,6 @@ function main() {
 
   renderFavourites();
   void loadCoverage();
-}
-
-/** Where an edit goes: this device's storage (signed-in sync is added where the store is). */
-function persist(rec: FavouritesRecord) {
-  saveRecord(rec);
 }
 
 main();

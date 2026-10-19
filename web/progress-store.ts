@@ -6,6 +6,15 @@
 // crash can never leave a record unqueued. Everything the pages use goes
 // through the ProgressStore interface; the sync loop uses SyncStore.
 
+import {
+  clearRecord,
+  type FavouritesRecord,
+  loadStored,
+  mergeNewer,
+  prefsId,
+  saveRecord,
+} from "./favourites.ts";
+
 /** One checked practice line. */
 export interface CheckRecord {
   /** Sync identity: a UUID, or a derived "legacy-…" one for a line checked before sync existed. */
@@ -148,8 +157,8 @@ export interface StrokesRecord {
   [field: string]: unknown;
 }
 
-export type Kind = "check" | "ink" | "strokes";
-export const KINDS: Kind[] = ["check", "ink", "strokes"];
+export type Kind = "check" | "ink" | "strokes" | "prefs";
+export const KINDS: Kind[] = ["check", "ink", "strokes", "prefs"];
 
 /** The records that are new or have a greater ts than the one held under the same id. */
 export function newerRecords(have: Map<string, number>, records: unknown[]): StrokesRecord[] {
@@ -657,7 +666,10 @@ export class DeviceStore implements ProgressStore, SyncStore {
   async enableSync(email: string): Promise<void> {
     this.#generation++;
     const tx = (await this.#open()).transaction(meta, "readwrite");
-    tx.objectStore(meta).put(freshSyncState(email), syncKey);
+    const fresh = freshSyncState(email);
+    // Favourites chosen here before signing in go up too; the greater ts wins on the server.
+    if ((loadStored()?.ts ?? 0) > 0) fresh.pendingAdds.push({ kind: "prefs", id: prefsId });
+    tx.objectStore(meta).put(fresh, syncKey);
     await done(tx);
   }
 
@@ -682,6 +694,7 @@ export class DeviceStore implements ProgressStore, SyncStore {
       })),
       ...i.result.map((id) => ({ kind: "ink" as const, id: String(id) })),
       ...st.result.map((id) => ({ kind: "strokes" as const, id: String(id) })),
+      ...((loadStored()?.ts ?? 0) > 0 ? [{ kind: "prefs" as const, id: prefsId }] : []),
     ];
   }
 
@@ -708,6 +721,12 @@ export class DeviceStore implements ProgressStore, SyncStore {
     await done(tx);
   }
 
+  /** Keep the favourites the person just edited (localStorage) and queue them for the next sync. */
+  async saveFavourites(rec: FavouritesRecord): Promise<void> {
+    saveRecord(rec);
+    await this.queueAdds([{ kind: "prefs", id: prefsId }]);
+  }
+
   /** Queue records for the next sync (a no-op while sync is off). */
   async queueAdds(entries: SyncEntry[]): Promise<void> {
     if (entries.length) await this.updateSync((s) => queueAdds(s, entries));
@@ -716,6 +735,11 @@ export class DeviceStore implements ProgressStore, SyncStore {
   async localRecords(kind: Kind, ids: string[]): Promise<Map<string, unknown>> {
     const out = new Map<string, unknown>();
     if (!ids.length) return out;
+    if (kind === "prefs") {
+      const rec = loadStored();
+      if (rec && rec.ts > 0 && ids.includes(prefsId)) out.set(prefsId, rec);
+      return out;
+    }
     if (kind === "strokes") {
       const tx = (await this.#open()).transaction(strokes, "readonly");
       const reqs = ids.map((id) => tx.objectStore(strokes).get(id));
@@ -736,6 +760,14 @@ export class DeviceStore implements ProgressStore, SyncStore {
   }
 
   async mergeRecords(kind: Kind, records: unknown[]): Promise<number> {
+    if (kind === "prefs") {
+      let n = 0;
+      for (const r of records) {
+        const { rec, took } = mergeNewer(loadStored(), r);
+        if (took && rec && saveRecord(rec)) n++;
+      }
+      return n;
+    }
     if (kind === "strokes") {
       // Read and write in one transaction, so a concurrent edit is never overwritten by an older record.
       const tx = (await this.#open()).transaction(strokes, "readwrite");
@@ -772,6 +804,13 @@ export class DeviceStore implements ProgressStore, SyncStore {
   async removeIds(kind: Kind, ids: string[]): Promise<string[]> {
     if (!ids.length) return [];
     const gone: string[] = [];
+    if (kind === "prefs") {
+      if (ids.includes(prefsId) && loadStored()) {
+        clearRecord();
+        gone.push(prefsId);
+      }
+      return gone;
+    }
     if (kind === "ink" || kind === "strokes") {
       const store = kind === "ink" ? ink : strokes;
       const tx = (await this.#open()).transaction(store, "readwrite");

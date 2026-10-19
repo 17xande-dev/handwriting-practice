@@ -122,7 +122,7 @@ func TestStrokesMigrationKeepsRecords(t *testing.T) {
 		t.Fatal("version 1 accepted a strokes record")
 	}
 	applied, err := db.Migrate(d)
-	if err != nil || len(applied) != 1 {
+	if err != nil || len(applied) != 2 {
 		t.Fatalf("applied %v, %v", applied, err)
 	}
 	var n int
@@ -154,5 +154,61 @@ func TestStrokesMigrationKeepsRecords(t *testing.T) {
 	d.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'records_old'`).Scan(&left)
 	if left != 0 {
 		t.Error("records_old left behind")
+	}
+}
+
+// The prefs migration rebuilds records again: rows and seq survive, the counter does not go back,
+// 'prefs' is accepted (and still no unknown kind).
+func TestPrefsMigrationKeepsRecords(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, f := range []string{"migrations/0001_init.sql", "migrations/0002_strokes_kind.sql"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.Exec(string(b)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := d.Exec(`PRAGMA user_version = 2`); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (email, password_hash, created_at) VALUES ('a@x.com', 'h', '')`,
+		`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'check', 'c1', '{"id":"c1","ts":1}')`,
+		`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'strokes', 's1', NULL)`,
+		`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'ink', 'gone', '{}')`,
+		`DELETE FROM records WHERE id = 'gone'`,
+	} {
+		if _, err := d.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if _, err := d.Exec(`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'prefs', 'p', '{}')`); err == nil {
+		t.Fatal("version 2 accepted a prefs record")
+	}
+	applied, err := db.Migrate(d)
+	if err != nil || len(applied) != 1 {
+		t.Fatalf("applied %v, %v", applied, err)
+	}
+	var n, seq int
+	d.QueryRow(`SELECT count(*) FROM records`).Scan(&n)
+	d.QueryRow(`SELECT seq FROM records WHERE id = 's1'`).Scan(&seq)
+	if n != 2 || seq != 2 {
+		t.Fatalf("%d rows, seq of s1 %d; want 2 and 2", n, seq)
+	}
+	if _, err := d.Exec(`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'prefs', 'prefs-favourites', '{}')`); err != nil {
+		t.Fatalf("prefs refused after migration: %v", err)
+	}
+	d.QueryRow(`SELECT seq FROM records WHERE id = 'prefs-favourites'`).Scan(&seq)
+	if seq != 4 {
+		t.Errorf("new seq %d, want 4 (the counter must not go back to 3)", seq)
+	}
+	if _, err := d.Exec(`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'sketch', 's', '{}')`); err == nil {
+		t.Fatal("an unknown kind was accepted")
 	}
 }

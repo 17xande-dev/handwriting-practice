@@ -3,9 +3,10 @@
 // The apps are local-first: each keeps its own history and treats the
 // server as a place to swap records with the user's other devices. A record
 // is one checked line ("check"), the ink of one checked attempt ("ink") or a
-// person's stroke definitions for one font ("strokes"), stored as the client's
-// own JSON. Checks and ink are never edited, so syncing is a union by
-// (kind, id); a strokes record is edited by its owner, and the greater ts wins. A deletion is a tombstone: the row stays with data NULL, so
+// person's stroke definitions for one font ("strokes") or preferences ("prefs",
+// the favourite fonts), stored as the client's own JSON. Checks and ink are never
+// edited, so syncing is a union by (kind, id); strokes and prefs records are edited
+// by their owner, and the greater ts wins. A deletion is a tombstone: the row stays with data NULL, so
 // every other device learns to delete it too.
 //
 // Every insert and tombstone takes a new seq. A client keeps the highest
@@ -19,22 +20,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 )
 
 // Kinds are the records the apps keep: a checked line, the quantized
 // strokes of one checked attempt, and a person's stroke definitions for one
-// font ("strokes").
-var Kinds = []string{"check", "ink", "strokes"}
+// font ("strokes"), and a person's preferences ("prefs").
+var Kinds = []string{"check", "ink", "strokes", "prefs"}
 
 func validKind(k string) bool {
-	return k == "check" || k == "ink" || k == "strokes"
+	return slices.Contains(Kinds, k)
 }
 
 // replaceable kinds are edited in place by their owner: a pushed record with
 // the same id and a greater ts replaces the stored one (and takes a new seq,
 // so every device pulls it). The others are immutable.
-func replaceable(kind string) bool { return kind == "strokes" }
+func replaceable(kind string) bool { return kind == "strokes" || kind == "prefs" }
 
 // MaxRecordBytes bounds one record's JSON. A check is a few KB; the ink of a
 // long line, quantized, is the largest.

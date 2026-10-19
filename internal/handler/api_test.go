@@ -108,7 +108,7 @@ func TestSyncEmptyResponseShape(t *testing.T) {
 	s.addUser(t, "a@x.com", false)
 	token := s.deviceToken(t, "a@x.com", testPassword)
 	rec := s.api(t, "POST", "/api/sync", `{"cursor":0}`, token, "")
-	want := `{"cursor":0,"records":{"check":[],"ink":[],"strokes":[]},"deleted":[],"more":false,"rejected":[]}`
+	want := `{"cursor":0,"records":{"check":[],"ink":[],"prefs":[],"strokes":[]},"deleted":[],"more":false,"rejected":[]}`
 	if got := strings.TrimSpace(rec.Body.String()); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
@@ -462,5 +462,33 @@ func TestSyncStrokesRecords(t *testing.T) {
 	back := s.sync(t, `{"cursor":0,"push":{"strokes":[`+rec(300, "three")+`]}}`, token, "")
 	if len(back.Records["strokes"]) != 0 {
 		t.Fatal("a deleted strokes record came back")
+	}
+}
+
+// A prefs record (the favourite fonts) is edited in place: a newer ts replaces it, a stale one does not,
+// and a deletion stays.
+func TestSyncPrefsRecords(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "a@x.com", false)
+	token := s.deviceToken(t, "a@x.com", testPassword)
+	rec := func(ts int, fam string) string {
+		return fmt.Sprintf(`{"id":"prefs-favourites","ts":%d,"v":1,"favourites":[{"id":"google:%s","kind":"google","family":%q}]}`, ts, fam, fam)
+	}
+	first := s.sync(t, `{"cursor":0,"push":{"prefs":[`+rec(100, "Caveat")+`]}}`, token, "")
+	if len(first.Records["prefs"]) != 1 || len(first.Rejected) != 0 {
+		t.Fatalf("prefs: %d records, rejected %+v", len(first.Records["prefs"]), first.Rejected)
+	}
+	second := s.sync(t, fmt.Sprintf(`{"cursor":%d,"push":{"prefs":[%s]}}`, first.Cursor, rec(200, "Pacifico")), token, "")
+	if len(second.Records["prefs"]) != 1 || string(second.Records["prefs"][0]) != rec(200, "Pacifico") {
+		t.Fatalf("newer edit not returned: %s", second.Records["prefs"])
+	}
+	third := s.sync(t, fmt.Sprintf(`{"cursor":%d,"push":{"prefs":[%s]}}`, second.Cursor, rec(150, "Stale")), token, "")
+	if len(third.Records["prefs"]) != 0 {
+		t.Fatalf("a stale edit replaced the record: %s", third.Records["prefs"])
+	}
+	s.sync(t, `{"cursor":0,"deleted":[{"kind":"prefs","id":"prefs-favourites"}]}`, token, "")
+	back := s.sync(t, `{"cursor":0,"push":{"prefs":[`+rec(300, "Again")+`]}}`, token, "")
+	if len(back.Records["prefs"]) != 0 {
+		t.Fatal("a deleted prefs record came back")
 	}
 }

@@ -17,10 +17,11 @@ end of this page. It is the same contract as music-practice's, with different re
   | `check` | one checked line: score, letters, metrics                 | `CheckRecord`                      |
   | `ink`   | the quantized strokes of one checked attempt (see below)  | `InkRecord`                        |
   | `strokes` | a person's stroke definitions for one font (see below)  | `StrokesRecord`                    |
+  | `prefs` | the person's preferences: the favourite fonts (see below) | `FavouritesRecord` (`web/favourites.ts`) |
 
-  The server accepts exactly these three kinds (a database `CHECK` constraint, migration `0002`, and
-  `history.Kinds`). Anything else lands in `rejected`. `check` and `ink` records are immutable;
-  `strokes` records are not (see its section).
+  The server accepts exactly these four kinds (a database `CHECK` constraint, migrations `0002` and
+  `0003`, and `history.Kinds`). Anything else lands in `rejected`. `check` and `ink` records are
+  immutable; `strokes` and `prefs` records are mutable, the greater `ts` winning (see their sections).
 - **Deletions are tombstones.** Clearing history on one device sends the removed ids (of check and ink; strokes definitions are not history and are not cleared).
   The server keeps a tombstone, so every other device deletes them too, and a device that hasn't
   heard yet can't resurrect them by pushing them again: a tombstoned id stays deleted.
@@ -161,6 +162,37 @@ equal or older `ts` is ignored, and a tombstoned id stays deleted. A client merg
 record the same way: keep the one with the greater `ts`. A client that edits a font and finds more
 parts than it now needs deletes the surplus ids.
 
+### `prefs`
+
+The person's preferences. For now one record, the favourite fonts: the fonts the worksheet toolbar
+(web) and the font picker (iPad) offer, in order. `id` is always `"prefs-favourites"`, `ts` is the
+time of the last edit in ms (so the last writer wins), `v` is 1.
+
+```json
+{"id":"prefs-favourites","ts":1760000000000,"v":1,
+ "favourites":[{"id":"italic","kind":"builtin","family":"Edu SA Beginner"},
+               {"id":"google:Caveat","kind":"google","family":"Caveat"},
+               {"id":"google:My Font","kind":"custom","family":"My Font"}]}
+```
+
+- **Order** is the array order.
+- Each member has `id`, `kind` (`"builtin"`, `"google"` or `"custom"`), `family` (the family name) and
+  optionally `variant` (a variant id; omitted means the whole family). For a `builtin`, `id` is the
+  FontCatalog font id (`"italic"`, `"briem-print"`, ...); a client that lists families rather than fonts
+  (the web's family tiles) writes the id of the family's first font and treats any id of the family as
+  that family. For `google` (a family in the curated handwriting list) and `custom` (any other
+  Google Fonts name the person typed), `id` is `"google:<family>"` and `family` passes the
+  family-name rule (`^[A-Za-z0-9][A-Za-z0-9 -]{0,63}$`).
+- **Unknown members are preserved**: a client keeps, in place, a member of a kind it does not know
+  (and any extra fields of a member or of the record) and writes it back as it was.
+- **Mutable by `ts`, like `strokes`:** a pushed `prefs` record with the same id as a live stored one and a
+  **greater `ts`** replaces it (the row takes a new seq, so every device pulls it); an equal or older
+  `ts` is ignored, and a tombstoned id stays deleted. A client merges a pulled record the same way: keep it
+  if its `ts` is greater than the local one's (no local record counts as 0), then refresh the toolbar.
+- **Every edit bumps `ts`** (to the edit time, and strictly above the record it replaced) and queues the
+  record. Before sign-in the favourites are only local; at the first sync both sides push and the
+  newer `ts` wins. A device that never edited them has no record (the defaults, `ts` 0) and sends nothing.
+
 ## Authentication
 
 - **Browser:** the `hp_session` cookie set by signing in at `/account`. Same-origin `fetch` sends it.
@@ -232,7 +264,8 @@ always send it):
   "push": {
     "check": [{ "id": "…", "ts": 1760000000000, "...": "the record's own fields" }],
     "ink": [],
-    "strokes": []
+    "strokes": [],
+    "prefs": []
   },
   "deleted": [{ "kind": "check", "id": "…" }]
 }
@@ -243,7 +276,7 @@ Response (always every key, always arrays, never `null`):
 ```json
 {
   "cursor": 42,
-  "records": { "check": [ {…} ], "ink": [], "strokes": [] },
+  "records": { "check": [ {…} ], "ink": [], "strokes": [], "prefs": [] },
   "deleted": [ { "kind": "check", "id": "…" } ],
   "more": false,
   "rejected": [ { "kind": "ink", "id": "…", "reason": "record over 65536 bytes" } ]

@@ -193,7 +193,7 @@ function main() {
   }
   // Choosing a favourite Google family (or its italic) loads it and measures its slope.
   toolbar.onChoose(() => void loadCustom(true));
-  attachFamilyTiles(toolbar);
+  const familyTiles = attachFamilyTiles(toolbar);
 
   loadAndLayout();
   redrawPreview(toolbar.read());
@@ -228,7 +228,10 @@ function main() {
   // the account when signed in (nothing happens while signed out).
   const syncer = installSync(store, {
     onResult: (r) => {
-      if (r.status === "ok" && r.changed) void refreshLookup();
+      if (r.status === "ok" && r.changed) {
+        void refreshLookup();
+        familyTiles.refresh(); // favourites edited on another device
+      }
     },
   });
   const modelName = () => {

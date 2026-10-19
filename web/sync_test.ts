@@ -1,6 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import { assert, assertEquals, assertFalse } from "@std/assert";
+import { type FavouritesRecord, mergeNewer, prefsId } from "./favourites.ts";
 import {
   type CheckRecord,
   freshSyncState,
@@ -30,6 +31,7 @@ class MemStore implements SyncStore {
   checks: CheckRecord[] = [];
   ink = new Map<string, InkRecord>();
   strokes = new Map<string, StrokesRecord>();
+  prefs: FavouritesRecord | null = null;
   state: SyncState | null = null;
   generation = 0;
 
@@ -52,6 +54,10 @@ class MemStore implements SyncStore {
   }
   localRecords(kind: Kind, ids: string[]) {
     const out = new Map<string, unknown>();
+    if (kind === "prefs") {
+      if (this.prefs && ids.includes(prefsId)) out.set(prefsId, this.prefs);
+      return Promise.resolve(out);
+    }
     for (const id of ids) {
       const r = kind === "ink"
         ? this.ink.get(id)
@@ -63,6 +69,17 @@ class MemStore implements SyncStore {
     return Promise.resolve(out);
   }
   mergeRecords(kind: Kind, records: unknown[]) {
+    if (kind === "prefs") {
+      let n = 0;
+      for (const r of records) {
+        const m = mergeNewer(this.prefs, r);
+        if (m.took) {
+          this.prefs = m.rec;
+          n++;
+        }
+      }
+      return Promise.resolve(n);
+    }
     if (kind === "check") {
       const { fresh } = planMerge(this.checks, records);
       this.checks.push(...fresh);
@@ -80,7 +97,12 @@ class MemStore implements SyncStore {
   removeIds(kind: Kind, ids: string[]) {
     const gone: string[] = [];
     for (const id of ids) {
-      if (kind === "ink") {
+      if (kind === "prefs") {
+        if (this.prefs && id === prefsId) {
+          this.prefs = null;
+          gone.push(id);
+        }
+      } else if (kind === "ink") {
         if (this.ink.delete(id)) gone.push(id);
       } else if (kind === "strokes") {
         if (this.strokes.delete(id)) gone.push(id);
@@ -218,7 +240,7 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const answer = (over: Record<string, unknown> = {}) => ({
   cursor: 1,
-  records: { check: [], ink: [], strokes: [] },
+  records: { check: [], ink: [], strokes: [], prefs: [] },
   deleted: [],
   more: false,
   rejected: [],
@@ -251,7 +273,7 @@ Deno.test("sync pages while more is true, then merges both kinds", async () => {
     () => json(answer({ cursor: 2, more: true, records: { check: [rec(20)] } })),
     (c) => {
       assertEquals(c.cursor, 2);
-      assertEquals(c.push, { check: [], ink: [], strokes: [] });
+      assertEquals(c.push, { check: [], ink: [], strokes: [], prefs: [] });
       return json(answer({ cursor: 3, records: { check: [rec(10)], ink: [inkOf("c10", "k1")] } }));
     },
   );
@@ -624,4 +646,29 @@ Deno.test("strokes records are stored as they come, and the greater ts wins", as
     extra: [1, 2],
   }]);
   assertEquals(newerRecords(new Map([["x", 5]]), [{ id: "x", ts: 5 }, { id: "y" }, 3]), []);
+});
+
+Deno.test("prefs records are kept by greater ts: pushed as stored, newer pulled wins, older does not", async () => {
+  const rec = (ts: number, family: string): FavouritesRecord => ({
+    id: prefsId,
+    ts,
+    v: 1,
+    favourites: [{ id: `google:${family}`, kind: "google", family }],
+  });
+  const store = syncedStore();
+  store.prefs = rec(100, "Caveat");
+  store.state!.pendingAdds.push({ kind: "prefs", id: prefsId });
+  const srv = fakeServer(
+    (c) => {
+      assertEquals(c.push.prefs, [rec(100, "Caveat")]);
+      return json(answer({ cursor: 1, records: { prefs: [rec(100, "Caveat")] } }));
+    },
+    () => json(answer({ cursor: 2, records: { prefs: [rec(90, "Old"), rec(200, "Pacifico")] } })),
+    () => json(answer({ cursor: 3, records: { prefs: [rec(150, "Stale")] } })),
+  );
+  assertEquals(await sync(store, srv.f), { status: "ok", changed: false });
+  assertEquals(await sync(store, srv.f), { status: "ok", changed: true });
+  assertEquals(store.prefs, rec(200, "Pacifico"));
+  assertEquals(await sync(store, srv.f), { status: "ok", changed: false });
+  assertEquals(store.prefs, rec(200, "Pacifico"));
 });

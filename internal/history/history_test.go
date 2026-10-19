@@ -311,3 +311,33 @@ func TestCheckRecordAcceptsStrokes(t *testing.T) {
 		t.Fatal("unknown kind accepted")
 	}
 }
+
+func prefsRec(ts int) Record {
+	return Record{Kind: "prefs", ID: "prefs-favourites", Data: json.RawMessage(fmt.Sprintf(`{"id":"prefs-favourites","ts":%d,"v":1,"favourites":[]}`, ts))}
+}
+
+// A prefs record is edited in place like strokes: a greater ts replaces it with a new seq, an equal or
+// older one is ignored, and a tombstone wins over any later push.
+func TestPrefsRecordsReplaceByTS(t *testing.T) {
+	s, a, _ := setup(t)
+	s.Push(ctx, a, []Record{prefsRec(10)}, nil)
+	_, c1 := pullAll(t, s, a, 0)
+	s.Push(ctx, a, []Record{prefsRec(10), prefsRec(5)}, nil)
+	if recs, c := pullAll(t, s, a, c1); len(recs) != 0 || c != c1 {
+		t.Fatalf("equal or older ts changed the record: %d", len(recs))
+	}
+	s.Push(ctx, a, []Record{prefsRec(20)}, nil)
+	recs, c2 := pullAll(t, s, a, c1)
+	if len(recs) != 1 || recordTS(recs[0].Data) != 20 || c2 <= c1 {
+		t.Fatalf("newer ts did not replace: %+v", recs)
+	}
+	s.Push(ctx, a, nil, []Ref{{Kind: "prefs", ID: "prefs-favourites"}})
+	s.Push(ctx, a, []Record{prefsRec(30)}, nil)
+	all, _ := pullAll(t, s, a, c2)
+	if len(all) != 1 || all[0].Data != nil {
+		t.Fatalf("a tombstoned prefs record came back: %+v", all)
+	}
+	if id, err := CheckRecord("prefs", json.RawMessage(`{"id":"prefs-favourites","ts":5}`)); err != nil || id != "prefs-favourites" {
+		t.Fatalf("%q %v", id, err)
+	}
+}

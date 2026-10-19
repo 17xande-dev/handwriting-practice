@@ -7,7 +7,7 @@
 // page: the session cookie is HttpOnly, so this code can only ask /api/me
 // whether it is there.
 //
-// Kinds are handled generically: "check", "ink" and "strokes" take exactly the same
+// Kinds are handled generically: "check", "ink", "strokes" and "prefs" take exactly the same
 // path, so whoever starts writing ink records needs only to store them.
 
 import { entryKey, type Kind, KINDS, type SyncEntry, type SyncStore } from "./progress-store.ts";
@@ -124,7 +124,7 @@ async function round(store: SyncStore, f: FetchFn, cap: Cap): Promise<Round> {
     );
   }
   const batch: SyncEntry[] = [];
-  const push: Record<Kind, unknown[]> = { check: [], ink: [], strokes: [] };
+  const push: Record<Kind, unknown[]> = { check: [], ink: [], strokes: [], prefs: [] };
   let bytes = 0, count = 0;
   for (const e of candidates) {
     const rec = locals[e.kind].get(e.id);
