@@ -1,4 +1,4 @@
-.PHONY: deploy run bundle build test vet fmt check up down fonts-fetch fixtures
+.PHONY: deploy run bundle build test vet fmt check up down fonts-fetch fixtures glyphs
 
 ADDR ?= :8083
 DB_PATH ?= $(HOME)/.local/share/handwriting/handwriting.db
@@ -24,6 +24,10 @@ test:
 ## fixtures: regenerate testdata/parity (model raster + web scores) with headless Chromium; needs the network for Google fonts
 fixtures: bundle
 	deno run -A tools/export-fixtures.ts
+
+## glyphs: regenerate testdata/glyphs (single-character model rasters of a-z, 0-9 for the stroke-model pipeline); needs the network
+glyphs: bundle
+	deno run -A tools/export-glyphs.ts
 
 vet:
 	go vet ./...

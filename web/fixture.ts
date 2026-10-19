@@ -256,6 +256,23 @@ const wobbles: Array<[string, number, number]> = [
   ["wobble15", 0.15, 15],
 ];
 
+/** A raster as a fixture's `model` member (what the glyph export stores per character). */
+export function fixtureModelOf(m: ModelRaster): FixtureModel {
+  return {
+    w: m.w,
+    h: m.h,
+    S,
+    vTop: m.vTop,
+    Yb: m.Yb,
+    uMin: m.uMin,
+    bounds: m.bounds,
+    asc: m.asc,
+    desc: m.desc,
+    xRatio: m.xRatio,
+    rle: rleEncode(m.ink),
+  };
+}
+
 export function buildFixture(m: ModelRaster, fontId: string): Fixture {
   const perfect = fromFixtureStrokes(toFixtureStrokes(strokesFromModel(m)));
   const named: Array<[string, Stroke[]]> = [
@@ -283,19 +300,7 @@ export function buildFixture(m: ModelRaster, fontId: string): Fixture {
     font: fontId,
     slant: m.slant,
     text: m.text,
-    model: {
-      w: m.w,
-      h: m.h,
-      S,
-      vTop: m.vTop,
-      Yb: m.Yb,
-      uMin: m.uMin,
-      bounds: m.bounds,
-      asc: m.asc,
-      desc: m.desc,
-      xRatio: m.xRatio,
-      rle: rleEncode(m.ink),
-    },
+    model: fixtureModelOf(m),
     cases,
   };
 }

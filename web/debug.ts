@@ -3,3 +3,4 @@
 // visitors never download it.
 
 export { buildFixture } from "./fixture.ts";
+export { fixtureModelOf } from "./fixture.ts";

@@ -396,7 +396,34 @@ function attachSheetCheck(rows: Row[]) {
       const raster = renderModelRaster(r.text, font, () => 0);
       return JSON.stringify(buildFixture(raster, modelId));
     };
-    (globalThis as Record<string, unknown>).__italic = { rows, modelStrokes, exportFixture };
+    // exportGlyph(fontId, char) resolves to a JSON string: one character rendered alone on the
+    // current model font (the fixture's `model` member, plus the font id, slant and char), for
+    // tools/export-glyphs and the stroke-model pipeline. Same waiting rules as exportFixture.
+    const exportGlyph = async (fontId: string, char: string) => {
+      const url = "/static/debug.js";
+      const { fixtureModelOf } = await import(url) as typeof import("./debug.ts");
+      const font = rows[0]?.font;
+      if (!font) throw new Error("row not laid out");
+      const want = getComputedStyle(document.documentElement).getPropertyValue(`--font-${fontId}`)
+        .trim();
+      if (want && font.family !== want) throw new Error(`row not laid out with ${fontId}`);
+      if (!document.fonts.check(`${font.style} 32px ${font.family}`)) {
+        throw new Error("model font not loaded");
+      }
+      const raster = renderModelRaster(char, font, () => 0);
+      return JSON.stringify({
+        font: fontId,
+        slant: font.slant,
+        char,
+        model: fixtureModelOf(raster),
+      });
+    };
+    (globalThis as Record<string, unknown>).__italic = {
+      rows,
+      modelStrokes,
+      exportFixture,
+      exportGlyph,
+    };
   }
 }
 
