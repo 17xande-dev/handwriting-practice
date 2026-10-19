@@ -364,7 +364,7 @@ and never copied by `make deploy`). Then, from a clean checkout of the commit
 to ship:
 
 ```sh
-make deploy                              # DEPLOY_HOST=ubuntu@192.168.0.30 by default
+make deploy                              # DEPLOY_HOST=ubuntu@192.168.0.29 by default
 make deploy DEPLOY_HOST=user@other-host
 ```
 

@@ -49,7 +49,7 @@ check:
 	  [ $$s -eq 0 ] || { echo "a bundle was stale against web/; rebundled it, commit the result"; exit 1; }
 	go test -count=1 ./...
 
-DEPLOY_HOST ?= ubuntu@192.168.0.30
+DEPLOY_HOST ?= ubuntu@192.168.0.29
 
 ## deploy: copy HEAD to the Docker host (DEPLOY_HOST=user@host) and rebuild and restart the stack there
 deploy:
