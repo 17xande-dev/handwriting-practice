@@ -386,6 +386,26 @@ Cloudflare settings for the hostname:
   rate-limiting rule on `POST /account/login` and `POST /api/token` (for
   example 10 requests per minute per IP, then block for a minute).
 
+## Stroke order and direction
+
+Besides shape, a check judges whether each letter's strokes were made in the model's order and
+direction (the iPad app's M10; its `docs/strokes.md` is the contract, `web/stroke-order.ts` the port,
+pinned by the golden vectors in `testdata/strokes`). The result is the **Order & direction** bar in
+Details, `scores.order` and `metrics2.order` in the check record, up to two notes, and flags on the
+letter chips. Built-in models for Edu SA Beginner and Briem Hand Unjoined are served from
+`/static/strokes/` (derived from OFL fonts; see `strokes/NOTICE`); a font without one is judged for
+shape only. **Show strokes** draws numbered start dots and arrows on the model and a Play button
+(tap a letter for one letter); **Trace first** shows the strokes still to write.
+
+The **Stroke models** page (`/strokes`) lists each font's coverage and lets you write your own
+strokes per character: drawn with the pen or mouse, snapped to the glyph's centreline, undo, reverse,
+reorder, save, export and import. Definitions are kept in IndexedDB as `strokes` records, in the
+iPad's JSON shape, so they sync both ways and are used first, then the built-in model. Not ported:
+suggestions from similar fonts (see the TODO in `web/strokes.ts`).
+
+The matching follows the approach of [Hanzi Writer](https://github.com/chanind/hanzi-writer)
+(MIT licence, Copyright David Chanin). No code was copied from it.
+
 ## Security
 
 - The CSP has no `unsafe-inline`. Templates carry no `style=` attributes, no

@@ -1,0 +1,88 @@
+{{define "scripts"}}
+<script type="module" src="{{asset "strokes.js"}}"></script>
+{{- end}}
+
+{{define "content"}}
+<div class="inner strokes-page" id="strokes">
+  <h1>Stroke models</h1>
+  <p class="lede">
+    Stroke order and direction are judged from a model of each letter's pen strokes. Fonts without
+    one are scored for shape only. Check the built-in strokes, or write your own: they are kept on
+    this device, and synced to your account if you sign in, so the iPad app uses them too.
+  </p>
+
+  <section class="strokes-fonts" aria-labelledby="fonts-heading">
+    <h2 id="fonts-heading">Fonts</h2>
+    <ul class="font-list" id="font-list">
+      {{- range .Groups}}{{range .Fonts}}
+      <li>
+        <button type="button" class="font-pick" data-font="{{.ID}}" data-slant="{{.Slant}}"{{if .Italic}} data-style="italic"{{end}} aria-pressed="false">
+          <span class="font-pick-name font-{{.ID}}">{{.Variant}}</span>
+          <span class="font-pick-note">{{.Note}}</span>
+          <span class="coverage" aria-hidden="true"><span class="coverage-fill"></span></span>
+          <span class="coverage-text"></span>
+        </button>
+      </li>
+      {{- end}}{{end}}
+    </ul>
+    <div class="custom-font">
+      <label class="field">Any Google font
+        <input type="text" id="custom-font" maxlength="64" autocomplete="off" autocapitalize="words"
+          autocorrect="off" spellcheck="false" placeholder="e.g. Caveat">
+      </label>
+      <button type="button" id="custom-font-load">Load</button>
+      <p class="custom-status" id="custom-font-status" role="status"></p>
+    </div>
+  </section>
+
+  <section class="strokes-grid" id="grid-section" aria-labelledby="grid-heading" hidden>
+    <h2 id="grid-heading">Characters</h2>
+    <ul class="status-legend" aria-label="Status key">
+      <li><span class="glyph-cell st-user" aria-hidden="true">&#x25CF;</span> Your definition</li>
+      <li><span class="glyph-cell st-builtinVerified" aria-hidden="true">&#x2713;</span> Built-in, verified</li>
+      <li><span class="glyph-cell st-builtinUnverified" aria-hidden="true">&#x25CB;</span> Built-in, unverified</li>
+      <li><span class="glyph-cell st-missing" aria-hidden="true">&ndash;</span> Missing</li>
+    </ul>
+    <div id="grid"></div>
+    <div class="history-actions">
+      <button type="button" id="export-strokes">Export this font's strokes</button>
+      <label class="button-like">Import strokes<input type="file" id="import-strokes" accept="application/json,.json"></label>
+    </div>
+    <p class="history-status" id="grid-status" role="status"></p>
+  </section>
+
+  <section class="strokes-editor" id="editor" aria-labelledby="editor-heading" hidden>
+    <h2 id="editor-heading">Define <span id="editor-char"></span></h2>
+    <p class="lede">
+      Write the strokes with the pen or mouse, in the order and direction you make them. Each one
+      snaps to the letter's centreline when you lift.
+    </p>
+    <div class="editor-canvas-box"><canvas id="editor-canvas" aria-label="Write the strokes of the letter here"></canvas></div>
+    <div class="editor-actions">
+      <button type="button" id="ed-undo">Undo</button>
+      <button type="button" id="ed-clear">Clear</button>
+      <button type="button" id="ed-reverse">Reverse</button>
+      <button type="button" id="ed-delete">Delete</button>
+      <button type="button" id="ed-builtin">Start from built-in</button>
+    </div>
+    <ol class="stroke-list" id="stroke-list" aria-label="Strokes, in order"></ol>
+    <div class="editor-actions">
+      <button type="button" class="primary" id="ed-save">Save and verify</button>
+      <button type="button" id="ed-done">Done</button>
+    </div>
+    <p class="history-status" id="editor-status" role="status"></p>
+  </section>
+
+  <section class="sync-card" aria-labelledby="strokes-sync-heading">
+    <h2 id="strokes-sync-heading">Sync</h2>
+    <p id="strokes-sync"></p>
+  </section>
+
+  <p class="strokes-credit">
+    The built-in models are derived from the outlines of Edu SA Beginner and Briem Hand Unjoined (SIL
+    Open Font License 1.1; see <a href="/static/strokes/NOTICE">the notice</a>). The way a stroke is
+    matched follows the approach of <a href="https://github.com/chanind/hanzi-writer" rel="noopener">Hanzi
+    Writer</a> (MIT licence, Copyright David Chanin).
+  </p>
+</div>
+{{end}}

@@ -75,7 +75,7 @@ func get(t *testing.T, h http.Handler, target string) (*http.Response, string) {
 // servedPages is every HTML page the app serves, so the page-wide rules below
 // cover a worksheet added tomorrow without anyone remembering to list it.
 func servedPages() []string {
-	p := []string{"/", "/sheet/no-such-sheet", "/practice/new", "/progress", "/account", "/account?notice=signed-out"}
+	p := []string{"/", "/sheet/no-such-sheet", "/practice/new", "/progress", "/strokes", "/account", "/account?notice=signed-out"}
 	for _, s := range sheets.All() {
 		p = append(p, "/sheet/"+s.Slug)
 	}
@@ -573,5 +573,33 @@ func TestStrokeModelsAreServed(t *testing.T) {
 	// Only the listed names are served: a stray file next to them is not.
 	if res, _ := get(t, h, "/static/strokes/README"); res.StatusCode == 200 {
 		t.Error("an unlisted file under strokes/ is served")
+	}
+}
+
+// The Stroke models page loads its own bundle (the editor and the skeleton snapping live only
+// there), links the notice, and is reachable from the navigation.
+func TestStrokesPage(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	res, body := get(t, h, "/strokes")
+	if res.StatusCode != 200 || !strings.Contains(body, `id="strokes"`) {
+		t.Fatalf("/strokes: %d", res.StatusCode)
+	}
+	m := regexp.MustCompile(`src="(/static/strokes\.js\?v=[0-9a-f]+)"`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("strokes page doesn't load strokes.js")
+	}
+	if res, js := get(t, h, m[1]); res.StatusCode != 200 || len(js) < 1000 {
+		t.Errorf("strokes.js: %d, %d bytes", res.StatusCode, len(js))
+	}
+	if _, sheet := get(t, h, "/sheet/arches"); strings.Contains(sheet, "strokes.js") {
+		t.Error("worksheet loads the strokes bundle")
+	}
+	if !strings.Contains(body, `href="/strokes"`) || !strings.Contains(body, "Hanzi") {
+		t.Error("no navigation link, or no Hanzi Writer credit")
+	}
+	for _, f := range fonts.Builtin {
+		if !strings.Contains(body, `data-font="`+f.ID+`"`) {
+			t.Errorf("font %s is not on the page", f.ID)
+		}
 	}
 }

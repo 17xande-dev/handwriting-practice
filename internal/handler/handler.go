@@ -168,6 +168,7 @@ func (s *Server) register(handle handleFunc) {
 	handle("GET /{$}", http.HandlerFunc(s.index))
 	handle("GET /sheet/{slug}", http.HandlerFunc(s.sheet))
 	handle("GET /progress", http.HandlerFunc(s.progress))
+	handle("GET /strokes", http.HandlerFunc(s.strokes))
 	handle("GET /practice/new", http.HandlerFunc(s.customForm))
 	handle("POST /practice/new", http.HandlerFunc(s.customForm))
 	handle("POST /practice", http.HandlerFunc(s.custom))
@@ -368,4 +369,11 @@ func (s *Server) custom(w http.ResponseWriter, r *http.Request) {
 // (IndexedDB) and is drawn by script; the server only serves the frame.
 func (s *Server) progress(w http.ResponseWriter, r *http.Request) {
 	s.render(w, http.StatusOK, "progress.html", page{Title: "Progress"})
+}
+
+// strokes is the Stroke models page: the fonts, a glyph grid per font and the editor where a person
+// writes their own strokes. The definitions live in the browser (IndexedDB, synced as `strokes`
+// records); the server only serves the frame and the built-in models (/static/strokes).
+func (s *Server) strokes(w http.ResponseWriter, r *http.Request) {
+	s.render(w, http.StatusOK, "strokes.html", page{Title: "Stroke models"})
 }

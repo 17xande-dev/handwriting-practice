@@ -141,8 +141,8 @@ ignore them, and a `pen` of any non-empty string is accepted (the iPad adds "poi
 ### `strokes`
 
 A person's own stroke definitions (order and direction of each letter's pen strokes) for one font,
-written on the iPad's "Stroke models" screen (iPad repo `docs/strokes.md`, "Sync"; the web has no UI
-for them yet and keeps and syncs them as they come). One record per font: `id` is `"strokes-<fontId>"`
+written on the iPad's "Stroke models" screen (iPad repo `docs/strokes.md`, "Sync"; the web's /strokes page
+writes them in the same shape and the worksheets judge by them). One record per font: `id` is `"strokes-<fontId>"`
 (the catalogue font id, or `custom-<family>` for a custom font), `ts` is the time of the last edit. It
 must stay within 64 KB, so a font with many definitions is split by glyph range into
 `"strokes-<fontId>-<n>"` (n from 0), each part holding the glyphs of a contiguous range of characters

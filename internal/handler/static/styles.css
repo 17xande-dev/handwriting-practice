@@ -1174,3 +1174,100 @@ table.data {
 }
 .sync-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap-sm); margin: 0 0 var(--gap-sm); }
 .sync-line[hidden] { display: none; }
+
+/* The Stroke models page. */
+.strokes-page { display: grid; gap: var(--gap-md); }
+
+.font-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: var(--gap-sm);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.font-pick {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px var(--gap-sm);
+  align-items: center;
+  width: 100%;
+  text-align: left;
+
+  &[aria-pressed="true"] { border-color: var(--accent); background: var(--paper-sunk); }
+  .font-pick-name { font-size: 1.1rem; }
+  .font-pick-note { grid-column: 1 / -1; font-size: 0.8rem; color: var(--ink-soft); }
+  .coverage { height: 6px; border-radius: 3px; background: var(--rule); overflow: hidden; }
+  .coverage-fill { display: block; height: 100%; background: var(--accent); }
+  /* A fixed width, so the bars of every font end in the same place. */
+  .coverage-text { min-width: 3.5ch; text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+}
+
+.status-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs) var(--gap-md);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.glyph-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(3.4rem, 1fr));
+  gap: 6px;
+}
+
+.glyph-cell {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  min-width: 2.2rem;
+  min-height: var(--tap);
+  padding: 2px 4px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+
+  .glyph-char { font-size: 1.6rem; line-height: 1.2; color: var(--ink); }
+  .glyph-mark { position: absolute; right: 3px; bottom: 0; font-size: 0.7rem; }
+  &.st-user { border-color: var(--accent); }
+  &.st-user .glyph-mark { color: var(--accent); }
+  &.st-builtinVerified .glyph-mark { color: #2e8540; }
+  &.st-builtinUnverified .glyph-mark { color: #a86d00; }
+  &.st-missing { border-style: dashed; }
+  &.st-missing .glyph-char { opacity: 0.45; }
+}
+
+.editor-canvas-box {
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+
+  canvas { display: block; touch-action: none; cursor: crosshair; }
+}
+
+.editor-actions { display: flex; flex-wrap: wrap; gap: var(--gap-xs); }
+
+.stroke-list {
+  display: grid;
+  gap: var(--gap-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stroke-item {
+  display: flex;
+  gap: var(--gap-xs);
+  align-items: center;
+
+  .stroke-pick { flex: 1; text-align: left; }
+  &[aria-current="true"] .stroke-pick { border-color: var(--accent); background: var(--paper-sunk); font-weight: 600; }
+}
+
+.strokes-credit { font-size: 0.85rem; color: var(--ink-soft); max-width: var(--measure); }

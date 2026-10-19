@@ -215,7 +215,7 @@ func TestRevokeOtherSession(t *testing.T) {
 // list is short and deliberate: adding a route anywhere means either adding
 // it here, with a reason, or protecting it.
 var publicRoutes = map[string]bool{
-	"GET /{$}": true, "GET /sheet/{slug}": true, "GET /progress": true,
+	"GET /{$}": true, "GET /sheet/{slug}": true, "GET /progress": true, "GET /strokes": true,
 	"GET /practice/new": true, "POST /practice/new": true, "POST /practice": true, "GET /practice": true,
 	"GET /static/": true, "GET /favicon.ico": true, "GET /healthz": true,
 	"GET /account":         true, // the sign-in form
