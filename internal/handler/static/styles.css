@@ -220,6 +220,7 @@ legend, .preview figcaption {
     box-shadow: inset 0 0 0 1px var(--accent);
   }
   &:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  &[hidden] { display: none; }
 }
 
 .tile-art {
@@ -586,7 +587,7 @@ button.primary {
 
 .custom-model { position: absolute; opacity: 0; pointer-events: none; }
 
-.custom-art { font-family: var(--font); }
+a.tile-more { text-decoration: none; border-style: dashed; }
 
 .custom-font {
   display: flex;
@@ -1271,3 +1272,62 @@ table.data {
 }
 
 .strokes-credit { font-size: 0.85rem; color: var(--ink-soft); max-width: var(--measure); }
+
+/* The Fonts page: a library of fonts to star, and the favourites in order. */
+.fonts-page { display: grid; gap: var(--gap-md); }
+.fonts-section { display: grid; gap: var(--gap-sm); align-content: start; }
+.fonts-section h2 { font-size: 1.15rem; margin: 0; }
+.font-status:empty, .font-count:empty { display: none; }
+.font-status, .font-count, .fav-empty { margin: 0; color: var(--ink-soft); font-size: 0.9rem; }
+
+.font-entries {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: var(--gap-sm);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+ol.font-entries { grid-template-columns: 1fr; max-width: 40rem; }
+
+.font-entry {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: var(--gap-sm);
+  padding: var(--gap-xs) var(--gap-sm);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fff;
+
+  &[hidden] { display: none; }
+  .star, .move {
+    min-width: var(--tap);
+    min-height: var(--tap);
+    padding: 0;
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .star[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+  .move { font-size: 1.1rem; }
+  .move:disabled { opacity: 0.35; cursor: default; }
+}
+.font-entry-body { display: grid; gap: 2px; min-width: 0; }
+.font-entry-name { font-weight: 600; overflow-wrap: anywhere; }
+.font-entry-note { font-size: 0.8rem; color: var(--ink-soft); }
+.font-entry-actions { display: flex; gap: var(--gap-xs); }
+.font-variant { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--gap-sm); }
+/* Room below for descenders. A Google family's sample is faint, in the fallback, until it loads. */
+.font-preview { font-size: 1.5rem; line-height: 1.8; color: var(--ink); }
+.font-preview.pending { font-family: cursive; opacity: 0.4; }
+.font-preview.unavailable { opacity: 0.45; font-size: 0.9rem; font-family: inherit; }
+.font-preview[data-italic] { font-style: italic; }
+.coverage-badge {
+  padding: 0 var(--gap-xs);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}

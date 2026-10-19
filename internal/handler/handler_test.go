@@ -75,7 +75,7 @@ func get(t *testing.T, h http.Handler, target string) (*http.Response, string) {
 // servedPages is every HTML page the app serves, so the page-wide rules below
 // cover a worksheet added tomorrow without anyone remembering to list it.
 func servedPages() []string {
-	p := []string{"/", "/sheet/no-such-sheet", "/practice/new", "/progress", "/strokes", "/account", "/account?notice=signed-out"}
+	p := []string{"/", "/sheet/no-such-sheet", "/practice/new", "/progress", "/strokes", "/fonts", "/account", "/account?notice=signed-out"}
 	for _, s := range sheets.All() {
 		p = append(p, "/sheet/"+s.Slug)
 	}
@@ -184,7 +184,8 @@ func TestSheetOffersEveryModelFont(t *testing.T) {
 	}
 }
 
-// Family tiles appear in catalogue order, with Google Fonts last.
+// Family tiles appear in catalogue order (the defaults for the favourites), then a "More…" tile
+// that opens the Fonts page; script shows favourites and Google families.
 func TestSheetFamiliesInOrder(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	_, body := get(t, h, "/sheet/arches")
@@ -192,13 +193,38 @@ func TestSheetFamiliesInOrder(t *testing.T) {
 	for _, g := range fonts.Groups(fonts.Builtin) {
 		want = append(want, g.Name)
 	}
-	want = append(want, "Google Fonts")
 	var got []string
 	for _, m := range regexp.MustCompile(`name="family" value="([^"]+)"`).FindAllStringSubmatch(body, -1) {
 		got = append(got, m[1])
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("families %q, want %q", got, want)
+	}
+	if !strings.Contains(body, `<a class="tile tile-more" href="/fonts">`) {
+		t.Error("no More… tile linking to /fonts")
+	}
+}
+
+// The Fonts page lists every bundled family with its font ids (for stroke coverage), and names the
+// generated Google handwriting list, which is served from /static.
+func TestFontsPage(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	res, body := get(t, h, "/fonts")
+	if res.StatusCode != 200 {
+		t.Fatalf("/fonts: %d", res.StatusCode)
+	}
+	for _, g := range fonts.Groups(fonts.Builtin) {
+		if !strings.Contains(body, `data-catalog-group="`+g.Name+`"`) {
+			t.Errorf("%s: not listed", g.Name)
+		}
+	}
+	m := regexp.MustCompile(`data-catalogue="([^"]+)"`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("no data-catalogue URL")
+	}
+	res, list := get(t, h, m[1])
+	if res.StatusCode != 200 || !strings.Contains(list, `"family"`) {
+		t.Errorf("%s: %d, %.80q", m[1], res.StatusCode, list)
 	}
 }
 

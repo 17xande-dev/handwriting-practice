@@ -7,6 +7,7 @@ import { encodeInk } from "./ink-codec.ts";
 import { lineCheckOf, metrics2Of, pen2Of, summarise } from "./metric-scores.ts";
 import { rowKey, sanitizeRecorded, sanitizeStrokes } from "./stroke-store.ts";
 import { setPressureUpper } from "./pens.ts";
+import { attachFamilyTiles } from "./family-tiles.ts";
 import { familyList, loadGoogleFont, validFamilyName } from "./googlefont.ts";
 import { History } from "./history.ts";
 import { measureFont, measureSlant } from "./measure.ts";
@@ -141,7 +142,6 @@ function main() {
   // "Any Google font": load the named family, measure its slope for the
   // paper, and show it on its tile.
   const status = document.getElementById("custom-font-status");
-  const art = document.getElementById("custom-art");
   const say = (text: string, error = false) => {
     if (!status) return;
     status.textContent = text;
@@ -149,7 +149,8 @@ function main() {
   };
   let loading = 0;
   const loadCustom = async (measure: boolean) => {
-    const name = toolbar.read().customFont.replace(/\s+/g, " ");
+    const { customFont: name, style } = toolbar.read();
+    const italic = style === "italic";
     if (!name) {
       say("Type a family name from fonts.google.com, then Load.");
       return;
@@ -157,7 +158,7 @@ function main() {
     const ticket = ++loading;
     say(`Loading “${name}”…`);
     try {
-      await loadGoogleFont(name);
+      await loadGoogleFont(name, italic);
     } catch (e) {
       if (ticket === loading) say((e as Error).message, true);
       return;
@@ -165,9 +166,8 @@ function main() {
     if (ticket !== loading) return; // a newer load superseded this one
     customLoaded = name;
     void refreshLookup();
-    if (art) art.style.fontFamily = familyList(name);
     if (measure) {
-      const slant = measureSlant(familyList(name), "normal");
+      const slant = measureSlant(familyList(name), italic ? "italic" : "normal");
       toolbar.set("customSlant", String(slant.degrees)); // notifies, which relays out
       say(
         slant.reliable
@@ -188,7 +188,12 @@ function main() {
     }
   });
   // A font chosen on an earlier visit comes back with its saved slant.
-  if (validFamilyName(toolbar.read().customFont)) loadCustom(false);
+  if (toolbar.read().model === "custom" && validFamilyName(toolbar.read().customFont)) {
+    loadCustom(false);
+  }
+  // Choosing a favourite Google family (or its italic) loads it and measures its slope.
+  toolbar.onChoose(() => void loadCustom(true));
+  attachFamilyTiles(toolbar);
 
   loadAndLayout();
   redrawPreview(toolbar.read());

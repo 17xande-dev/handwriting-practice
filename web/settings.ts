@@ -6,13 +6,16 @@
 import type { Pen } from "./ink.ts";
 import { pressureUpperDefault, pressureUpperRange } from "./pens.ts";
 
+/** A Google family's tile and chips are filed under "google:<family>". */
+export const googlePrefix = "google:";
+
 export interface Settings {
   pen: Pen;
   /** x-height in CSS pixels. */
   xh: number;
   /** Model font id from the catalogue, or "custom" for a Google font by name. */
   model: string;
-  /** The family the model belongs to, as the picker's tiles name it. */
+  /** The family the model belongs to, as the picker's tiles name it ("google:<family>" for a Google font). */
   group: string;
   /** CSS font-style of the model: "normal" or "italic". */
   style: string;
@@ -32,6 +35,7 @@ const variantsKey = "italic-practice:variants";
 export class Toolbar {
   #form: HTMLFormElement;
   #listeners: Array<(now: Settings, before: Settings) => void> = [];
+  #choosers: Array<(s: Settings) => void> = [];
   #last: Settings;
 
   constructor(form: HTMLFormElement) {
@@ -54,12 +58,40 @@ export class Toolbar {
     // Choosing a family tile chooses a variant within it: the one last used
     // in that family, or its first. The tiles aren't part of the form, and
     // which one is lit always follows the chosen variant (see #sync).
-    for (const tile of document.querySelectorAll<HTMLInputElement>('input[name="family"]')) {
-      tile.addEventListener("change", () => this.#chooseFamily(tile.value));
-    }
+    // The favourites' tiles and chips come and go, so listen on the document.
+    document.addEventListener("change", (e) => {
+      const t = e.target as HTMLInputElement | null;
+      if (t?.name === "family") this.#chooseFamily(t.value);
+      else if (t?.name === "styleChip") this.#chooseStyle(t.value);
+    });
+  }
+
+  /** Called after the person picks a Google family or one of its styles (not when they type a name). */
+  onChoose(fn: (s: Settings) => void) {
+    this.#choosers.push(fn);
+  }
+
+  #chooseStyle(style: string) {
+    this.set("customStyle", style === "italic" ? "italic" : "normal");
+    for (const fn of this.#choosers) fn(this.read());
   }
 
   #chooseFamily(group: string) {
+    if (group.startsWith(googlePrefix)) {
+      const remembered = this.#rememberedVariants()[group];
+      const custom = this.#inputs().find((e) => e.name === "model" && e.value === "custom");
+      const name = this.#form.elements.namedItem("customFont");
+      const style = this.#form.elements.namedItem("customStyle");
+      if (!custom || !(name instanceof HTMLInputElement)) return;
+      custom.checked = true;
+      name.value = group.slice(googlePrefix.length);
+      if (style instanceof HTMLInputElement) {
+        style.value = remembered === "italic" ? "italic" : "normal";
+      }
+      this.changed();
+      for (const fn of this.#choosers) fn(this.read());
+      return;
+    }
     const variants = this.#inputs().filter((e) => e.name === "model" && e.dataset.group === group);
     if (variants.length === 0) return;
     const remembered = this.#rememberedVariants()[group];
@@ -82,7 +114,10 @@ export class Toolbar {
     try {
       localStorage.setItem(
         variantsKey,
-        JSON.stringify({ ...this.#rememberedVariants(), [s.group]: s.model }),
+        JSON.stringify({
+          ...this.#rememberedVariants(),
+          [s.group]: s.model === "custom" ? s.style : s.model,
+        }),
       );
     } catch {
       // Not remembered; the family's first variant is chosen next time.
@@ -143,14 +178,18 @@ export class Toolbar {
     const models = this.#inputs().filter((e) => e.name === "model");
     const model = models.find((e) => e.checked) ?? models[0];
     const custom = model?.value === "custom";
+    const customFont = String(f.get("customFont") ?? "").trim().replace(/\s+/g, " ");
     return {
       pen,
       xh: num("xh", 32),
       model: model?.value ?? "",
-      group: model?.dataset.group ?? "",
-      style: model?.dataset.style ?? "normal",
+      // A Google font's tile is named for its family; the one "custom" model serves them all.
+      group: custom ? `${googlePrefix}${customFont}` : model?.dataset.group ?? "",
+      style: custom
+        ? (f.get("customStyle") === "italic" ? "italic" : "normal")
+        : model?.dataset.style ?? "normal",
       slant: custom ? num("customSlant", 0) : Number(model?.dataset.slant ?? 0) || 0,
-      customFont: String(f.get("customFont") ?? "").trim(),
+      customFont,
       touchWrites: f.get("finger") === "on",
       pressure: Math.min(
         pressureUpperRange[1],
@@ -175,6 +214,10 @@ export class Toolbar {
     }
     for (const chip of document.querySelectorAll<HTMLElement>(".chip[data-group]")) {
       chip.hidden = chip.dataset.group !== s.group;
+    }
+    // A Google family's style chips (Regular, Italic) follow the chosen style.
+    for (const chip of document.querySelectorAll<HTMLInputElement>('input[name="styleChip"]')) {
+      chip.checked = s.model === "custom" && chip.value === s.style;
     }
     const slantOut = document.getElementById("custom-slant-out");
     if (slantOut instanceof HTMLOutputElement && s.model === "custom") {

@@ -1,0 +1,63 @@
+{{define "scripts"}}
+<script type="module" src="{{asset "fonts.js"}}"></script>
+{{- end}}
+
+{{define "content"}}
+<div class="inner fonts-page" id="fonts-page" data-catalogue="{{asset "google-handwriting.json"}}">
+  <h1>Fonts</h1>
+  <p class="lede">
+    Star the fonts you want to practise from: they become the tiles in the worksheet's Model picker,
+    in the order set here. Previews load as you scroll. Favourites are kept on this device.
+  </p>
+  <p class="font-status" id="fonts-status" role="status"></p>
+
+  <section class="fonts-section" aria-labelledby="fav-heading">
+    <h2 id="fav-heading" tabindex="-1">Your favourites</h2>
+    <p class="fav-empty" id="fav-empty" hidden>No favourites yet: star a font below. The toolbar then offers only the font you have selected, and More&hellip;.</p>
+    <ol class="font-entries" id="fav-list"></ol>
+    <p><button type="button" id="fav-reset">Reset to the defaults</button></p>
+  </section>
+
+  <section class="fonts-section" aria-labelledby="bundled-heading">
+    <h2 id="bundled-heading">Bundled models</h2>
+    <ul class="font-entries" id="bundled-list">
+      {{- range .Groups}}
+      <li class="font-entry" data-catalog-group="{{.Name}}" data-ids="{{range $i, $f := .Fonts}}{{if $i}} {{end}}{{$f.ID}}{{end}}" data-families="{{range $i, $f := .Fonts}}{{if $i}}|{{end}}{{$f.Family}}{{end}}">
+        <button type="button" class="star" data-kind="builtin" data-name="{{.Name}}" aria-pressed="false" aria-label="Favourite: {{.Name}}"><span aria-hidden="true">&#x2606;</span></button>
+        <div class="font-entry-body">
+          <span class="font-entry-name">{{.Name}}</span>
+          {{- range .Fonts}}
+          <div class="font-variant" data-font="{{.ID}}">
+            <span class="font-preview font-{{.ID}}"{{if .Italic}} data-italic{{end}}>minimum quick</span>
+            <span class="font-entry-note">{{.Variant}}, {{.Note}}</span>
+            <span class="coverage-badge" hidden></span>
+          </div>
+          {{- end}}
+        </div>
+      </li>
+      {{- end}}
+    </ul>
+  </section>
+
+  <section class="fonts-section" aria-labelledby="google-heading">
+    <h2 id="google-heading">Google Fonts: handwriting</h2>
+    <label class="field">Filter
+      <input type="search" id="google-filter" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. Playwrite">
+    </label>
+    <p class="font-count" id="google-count" aria-live="polite"></p>
+    <ul class="font-entries" id="google-list"></ul>
+  </section>
+
+  <section class="fonts-section" aria-labelledby="own-heading">
+    <h2 id="own-heading">Another Google family</h2>
+    <div class="custom-font">
+      <label class="field">Family name
+        <input type="text" id="own-family" maxlength="64" autocomplete="off" autocapitalize="words"
+          autocorrect="off" spellcheck="false" placeholder="e.g. Caveat">
+      </label>
+      <button type="button" id="own-add">Add to favourites</button>
+      <p class="custom-status" id="own-status" role="status"></p>
+    </div>
+  </section>
+</div>
+{{end}}

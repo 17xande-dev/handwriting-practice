@@ -131,19 +131,21 @@
      choosing among them, so they aren't part of the form. -->
 <section class="models inner" aria-labelledby="models-heading">
   <h2 id="models-heading">Model</h2>
-  <div class="family-tiles" role="radiogroup" aria-label="Font family">
+  <!-- The tiles are the favourite fonts (web/family-tiles.ts shows, hides and orders them, and
+       makes a tile for each favourite Google family); the catalogue's are all here, and "More…"
+       opens the Fonts page, where favourites are chosen. -->
+  <div class="family-tiles" id="family-tiles" role="radiogroup" aria-label="Font family" data-catalogue="{{asset "google-handwriting.json"}}">
     {{- range .Groups}}
-    <label class="tile">
+    <label class="tile" data-catalog-group="{{.Name}}" data-ids="{{range $i, $f := .Fonts}}{{if $i}} {{end}}{{$f.ID}}{{end}}">
       <input type="radio" name="family" value="{{.Name}}">
       <span class="tile-art font-{{(index .Fonts 0).ID}}" aria-hidden="true">an</span>
       <span class="tile-label">{{.Name}}</span>
     </label>
     {{- end}}
-    <label class="tile">
-      <input type="radio" name="family" value="Google Fonts">
-      <span class="tile-art custom-art" id="custom-art" aria-hidden="true">Aa</span>
-      <span class="tile-label">Google Fonts</span>
-    </label>
+    <a class="tile tile-more" href="/fonts">
+      <span class="tile-art" aria-hidden="true">&hellip;</span>
+      <span class="tile-label">More&hellip;</span>
+    </a>
   </div>
   <div class="variant-chips" role="radiogroup" aria-label="Variant">
     {{- range .Groups}}{{range .Fonts}}
@@ -153,9 +155,10 @@
       <span class="chip-note">{{.Note}}</span>
     </label>
     {{- end}}{{end}}
-    <!-- Google Fonts has no chips: its family tile selects this, and the
-         panel below names the font. -->
+    <!-- A Google family has no chips of its own here: its tile selects this, the family is
+         named in the panel below, and script adds Regular and Italic chips where it has them. -->
     <input class="custom-model" type="radio" form="toolbar" name="model" value="custom" data-group="Google Fonts" tabindex="-1" aria-hidden="true">
+    <input type="hidden" form="toolbar" name="customStyle" value="normal">
   </div>
   <div class="stroke-aids" role="group" aria-label="Stroke order">
     <label class="toggle">
@@ -169,7 +172,7 @@
     <span class="stroke-aids-note">Numbered start dots and arrows on the model; Play, or tap a letter, to watch it written.</span>
   </div>
   <div class="custom-font" data-model="custom" hidden>
-    <label class="field">Google Fonts family
+    <label class="field">Google Fonts family (the selected font)
       <input type="text" form="toolbar" name="customFont" id="custom-font" maxlength="64"
         autocomplete="off" autocapitalize="words" autocorrect="off" spellcheck="false"
         placeholder="e.g. Caveat">
