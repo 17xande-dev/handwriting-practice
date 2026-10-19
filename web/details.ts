@@ -5,6 +5,7 @@
 
 import type { LineMetrics, SubScores } from "./metric-scores.ts";
 import { roundInt } from "./metrics.ts";
+import { orderTotals } from "./stroke-order.ts";
 
 const dash = "—";
 
@@ -48,7 +49,18 @@ export function metricRows(m: LineMetrics): Array<[string, string]> {
   const c = m.consistency, p = m.pen, f = m.fluency, z = m.shape;
   const pm = (a: number, b: number, unit: string) =>
     Number.isFinite(a) ? `${fmt(a, 0)}${unit} ±${fmt(b, 0)}${unit}` : dash;
+  const o = m.order ? orderTotals(m.order) : null;
+  const order: Array<[string, string]> = o
+    ? [
+      ["Order: letters judged", `${o.judged}, strokes matched ${o.matched}`],
+      [
+        "Order: problems",
+        `wrong way ${o.reversed}, wrong start ${o.wrongStart}, wrong order ${o.wrongOrder}, lifts +${o.extraLifts} \u2212${o.missingLifts}, missing strokes ${o.missingStrokes}`,
+      ],
+    ]
+    : [];
   return [
+    ...order,
     ["Error: ascender", fmt(z.zoneAscender, 2, " xh")],
     ["Error: body", fmt(z.zoneBody, 2, " xh")],
     ["Error: descender", fmt(z.zoneDescender, 2, " xh")],
@@ -140,6 +152,8 @@ export function renderPanel(m: LineMetrics): HTMLElement {
     bar("Pen control", s.penControl),
     bar("Fluency", s.fluency),
   );
+  // Only measured where the model font has strokes for the line (docs/strokes.md).
+  if (s.order !== undefined) bars.append(bar("Order & direction", s.order));
   panel.append(bars);
   if (m.notes.length) {
     const ul = document.createElement("ul");

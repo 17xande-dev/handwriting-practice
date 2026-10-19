@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"encoding/json"
 	"html"
 	"io"
 	"log/slog"
@@ -539,5 +540,38 @@ func TestAdminResponsesAreNotIndexedOrCached(t *testing.T) {
 		if h.Get("X-Robots-Tag") != "noindex" || h.Get("Cache-Control") != "no-store" {
 			t.Errorf("%s: X-Robots-Tag %q, Cache-Control %q", p, h.Get("X-Robots-Tag"), h.Get("Cache-Control"))
 		}
+	}
+}
+
+// The built-in stroke models are served under /static with their own types: JSON for the models,
+// plain text for the licence notice that travels with them.
+func TestStrokeModelsAreServed(t *testing.T) {
+	h := newTestServer(t, fonts.Builtin)
+	for _, id := range []string{"italic", "briem-print"} {
+		res, body := get(t, h, "/static/strokes/"+id+".json")
+		if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
+			t.Errorf("%s: status %d, type %q", id, res.StatusCode, res.Header.Get("Content-Type"))
+		}
+		var f struct {
+			V         int                        `json:"v"`
+			Model     string                     `json:"model"`
+			Copyright string                     `json:"copyright"`
+			Glyphs    map[string]json.RawMessage `json:"glyphs"`
+		}
+		if err := json.Unmarshal([]byte(body), &f); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if f.V != 1 || f.Model != id || f.Copyright == "" || len(f.Glyphs) < 36 {
+			t.Errorf("%s: v %d model %q copyright %q glyphs %d", id, f.V, f.Model, f.Copyright, len(f.Glyphs))
+		}
+	}
+	res, body := get(t, h, "/static/strokes/NOTICE")
+	if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/plain") ||
+		!strings.Contains(body, "SIL OPEN FONT LICENSE") {
+		t.Errorf("NOTICE: status %d, type %q", res.StatusCode, res.Header.Get("Content-Type"))
+	}
+	// Only the listed names are served: a stray file next to them is not.
+	if res, _ := get(t, h, "/static/strokes/README"); res.StatusCode == 200 {
+		t.Error("an unlisted file under strokes/ is served")
 	}
 }

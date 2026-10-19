@@ -15,6 +15,13 @@ import { attachPen, type Sample } from "./pen.ts";
 import { eraserTolerance, strokesHit, type UV } from "./eraser.ts";
 import type { Settings } from "./settings.ts";
 import { fingerprint, type Recorded } from "./stroke-store.ts";
+import {
+  flagSymbol,
+  flagTitle,
+  letterFlags,
+  pairOrderLetters,
+  type StrokeLookup,
+} from "./stroke-order.ts";
 
 export interface Theme {
   guides: GuideColors;
@@ -91,6 +98,8 @@ export class Row {
    * recognised by its fingerprint, which is saved with it).
    */
   onRecord: (r: CheckResult, pen: string, m: LineMetrics, strokes: Stroke[]) => void = () => {};
+  /** The stroke models to judge order and direction by (the person's own, then the built-in); null for none. */
+  strokeLookup: () => StrokeLookup | null = () => null;
   /** Called with the line's writing after every change to it (the caller debounces its saving). */
   onStrokes: (strokes: Stroke[]) => void = () => {};
   /** The writing (and model) last recorded as a check, and that check's id once it is stored. */
@@ -364,7 +373,9 @@ export class Row {
     if (!this.#font || this.#strokes.length === 0) return null;
     this.#replay.stop();
     this.#result = check(this.#text, this.#font, this.#strokes);
-    this.#metrics = this.#result ? lineMetrics(this.#text, this.#strokes, this.#result) : null;
+    this.#metrics = this.#result
+      ? lineMetrics(this.#text, this.#strokes, this.#result, this.strokeLookup())
+      : null;
     this.#showResult = true;
     const fp = fingerprint(this.#strokes, this.#font);
     if (this.#result && this.#metrics && this.#recorded?.fp !== fp) {
@@ -439,6 +450,8 @@ export class Row {
 
     const letters = document.createElement("ol");
     letters.className = "result-letters";
+    // The judged letters are a subsequence of the written ones: matched by character, in order.
+    const judged = m?.order ? pairOrderLetters(r.letters, m.order.letters) : null;
     for (const l of r.letters) {
       const li = document.createElement("li");
       li.className = `letter ${l.missing ? "missing" : scoreClass(l.score)}`;
@@ -455,6 +468,22 @@ export class Row {
       sc.className = "letter-score";
       sc.textContent = l.missing ? "missing" : `${l.score}`;
       li.append(ch, sc);
+      const order = judged?.get(l.index);
+      const flags = order ? letterFlags(order) : [];
+      if (flags.length) {
+        const fl = document.createElement("span");
+        fl.className = "letter-flags";
+        for (const f of flags) {
+          const b = document.createElement("span");
+          b.className = `flag flag-${f}`;
+          b.textContent = flagSymbol[f];
+          b.title = flagTitle[f];
+          fl.append(b);
+        }
+        fl.setAttribute("aria-label", flags.map((f) => flagTitle[f]).join(", "));
+        li.dataset.flags = flags.join(" ");
+        li.append(fl);
+      }
       letters.append(li);
     }
 

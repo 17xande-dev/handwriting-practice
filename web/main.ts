@@ -15,6 +15,8 @@ import { attachWritingArea } from "./pen.ts";
 import { Row, type Theme } from "./row.ts";
 import { DeviceStore, type InkRecord, type Metrics2 } from "./progress-store.ts";
 import { installSync } from "./sync-triggers.ts";
+import { StrokeModels } from "./stroke-lookup.ts";
+import type { StrokeLookup } from "./stroke-order.ts";
 import { type Settings, Toolbar } from "./settings.ts";
 
 function cssVar(name: string, fallback: string): string {
@@ -61,6 +63,7 @@ function main() {
   };
 
   const toolbar = new Toolbar(form);
+  const store = new DeviceStore();
   setPressureUpper(toolbar.read().pressure);
   const history = new History();
   attachHistory(history);
@@ -89,6 +92,24 @@ function main() {
     s.model === "custom"
       ? (customLoaded ? familyList(customLoaded) : "cursive")
       : cssVar(`--font-${s.model}`, cssVar("--ref-font", "serif"));
+  // The stroke models order and direction are judged by: the person's own definitions (this device's
+  // `strokes` records, kept current by sync), then the built-in model of the chosen font.
+  const strokeModels = new StrokeModels(store);
+  let strokeLookup: StrokeLookup | null = null;
+  let lookupTicket = 0;
+  const refreshLookup = async () => {
+    const ticket = ++lookupTicket;
+    const s = toolbar.read();
+    await strokeModels.refresh();
+    const l = await strokeModels.lookup(s.model, s.model === "custom" ? customLoaded : "");
+    if (ticket === lookupTicket) strokeLookup = l;
+  };
+  for (const r of rows) r.strokeLookup = () => strokeLookup;
+  void refreshLookup();
+  // Definitions edited on the Stroke models page (another tab) or synced from another device.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") void refreshLookup();
+  });
   const layoutAll = () => {
     const s = toolbar.read();
     const font = measureFont(family(s), s.style, s.slant);
@@ -134,6 +155,7 @@ function main() {
     }
     if (ticket !== loading) return; // a newer load superseded this one
     customLoaded = name;
+    void refreshLookup();
     if (art) art.style.fontFamily = familyList(name);
     if (measure) {
       const slant = measureSlant(familyList(name), "normal");
@@ -169,6 +191,7 @@ function main() {
       for (const r of rows) r.redraw();
     }
     redrawPreview(now);
+    if (now.model !== before.model || now.customFont !== before.customFont) void refreshLookup();
     if (now.model !== before.model || now.style !== before.style) loadAndLayout();
     else if (now.xh !== before.xh || now.slant !== before.slant) layoutAll();
   });
@@ -185,12 +208,15 @@ function main() {
     });
   }).observe(rowsEl);
 
-  attachSheetCheck(rows);
+  attachSheetCheck(rows, () => strokeLookup);
 
   // Every check is kept on this device for the progress page, and synced to
   // the account when signed in (nothing happens while signed out).
-  const store = new DeviceStore();
-  const syncer = installSync(store);
+  const syncer = installSync(store, {
+    onResult: (r) => {
+      if (r.status === "ok" && r.changed) void refreshLookup();
+    },
+  });
   const modelName = () => {
     const s = toolbar.read();
     if (s.model === "custom") return customLoaded || s.customFont || "Google font";
@@ -316,7 +342,7 @@ function attachHistory(history: History) {
  * it, then summarise. The summary hides itself as soon as any line's check
  * goes stale.
  */
-function attachSheetCheck(rows: Row[]) {
+function attachSheetCheck(rows: Row[], lookup: () => StrokeLookup | null) {
   const button = document.getElementById("check-all");
   const summary = document.getElementById("sheet-summary");
   if (!(button instanceof HTMLButtonElement) || !summary) return;
@@ -418,9 +444,19 @@ function attachSheetCheck(rows: Row[]) {
         model: fixtureModelOf(raster),
       });
     };
+    // definedStrokes(row) resolves to the row's line written as its stroke models say (see debug.ts).
+    const definedStrokes = async (row = 0) => {
+      const url = "/static/debug.js";
+      const d = await import(url) as typeof import("./debug.ts");
+      const r = rows[row];
+      const l = lookup();
+      if (!r?.font || !l) throw new Error("row not laid out, or no stroke models");
+      return d.definedStrokes(r.text, r.font, l);
+    };
     (globalThis as Record<string, unknown>).__italic = {
       rows,
       modelStrokes,
+      definedStrokes,
       exportFixture,
       exportGlyph,
     };

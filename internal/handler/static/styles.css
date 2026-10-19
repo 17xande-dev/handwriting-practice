@@ -767,6 +767,27 @@ button.primary {
   .letter-score { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
 }
 
+/* Stroke order and direction flags under a letter chip (reversed, wrong start, wrong order,
+   extra or missing lift, missing stroke); the colour is the "fair" amber, a hint rather than an error. */
+.letter-flags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px;
+  max-width: 5rem;
+
+  .flag {
+    font-size: 0.7rem;
+    line-height: 1.2;
+    padding: 0 3px;
+    border-radius: 3px;
+    background: color-mix(in srgb, #a86d00 14%, transparent);
+    color: #a86d00;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}
+
 /* Score bands. The same three colours mark the ink on the canvas
    (deviationColors in web/evaluate.ts). */
 .good { color: #2e8540; }

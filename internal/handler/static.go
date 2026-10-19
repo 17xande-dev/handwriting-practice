@@ -25,6 +25,14 @@ var contentTypes = map[string]string{
 	".svg": "image/svg+xml",
 	".png": "image/png",
 	".ttf": "font/ttf",
+	// The built-in stroke models (strokes/<modelId>.json).
+	".json": "application/json; charset=utf-8",
+}
+
+// namedTypes are the few servable files with no (or a misleading) extension,
+// by exact name: the licence notice that travels with the stroke models.
+var namedTypes = map[string]string{
+	"strokes/NOTICE": "text/plain; charset=utf-8",
 }
 
 type asset struct {
@@ -61,9 +69,12 @@ func loadAssets() (assets, error) {
 }
 
 // add registers a servable file. A name whose extension isn't in
-// contentTypes is ignored, so it can never be served.
+// contentTypes (and isn't one of namedTypes) is ignored, so it can never be served.
 func (a assets) add(name string, body []byte) {
-	ctype, ok := contentTypes[path.Ext(name)]
+	ctype, ok := namedTypes[name]
+	if !ok {
+		ctype, ok = contentTypes[path.Ext(name)]
+	}
 	if !ok {
 		return
 	}

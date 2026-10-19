@@ -89,8 +89,30 @@ export interface Metrics2 {
     | "lettersPerMinute"
     | "activeMs"
   >;
-  scores?: { shape?: number; consistency?: number; pen?: number; fluency?: number };
+  scores?: { shape?: number; consistency?: number; pen?: number; fluency?: number; order?: number };
   notes?: string[];
+  /** Stroke order and direction (iPad docs/strokes.md, "Record"); omitted when no letter was judged. */
+  order?: {
+    judged?: number;
+    matched?: number;
+    reversed?: number;
+    wrongStart?: number;
+    wrongOrder?: number;
+    extraLifts?: number;
+    missingLifts?: number;
+    missingStrokes?: number;
+    letters?: Array<{
+      char: string;
+      matched?: number;
+      reversed?: number;
+      wrongStart?: number;
+      wrongOrder?: number;
+      extraLifts?: number;
+      missingLifts?: number;
+      missingStrokes?: number;
+      credit?: number | null;
+    }>;
+  };
 }
 
 /** What a caller records: the identity is assigned by the store. */
@@ -661,6 +683,29 @@ export class DeviceStore implements ProgressStore, SyncStore {
       ...i.result.map((id) => ({ kind: "ink" as const, id: String(id) })),
       ...st.result.map((id) => ({ kind: "strokes" as const, id: String(id) })),
     ];
+  }
+
+  /** Every stored `strokes` record (the person's stroke definitions, in parts), as they are. */
+  async allStrokesRecords(): Promise<StrokesRecord[]> {
+    const tx = (await this.#open()).transaction(strokes, "readonly");
+    const req = tx.objectStore(strokes).getAll();
+    await done(tx);
+    return req.result as StrokesRecord[];
+  }
+
+  /**
+   * Store `strokes` records the person edited here (every part of the new version, old parts
+   * emptied) and queue them for the next sync, in one transaction.
+   */
+  async saveStrokesRecords(records: StrokesRecord[]): Promise<void> {
+    if (!records.length) return;
+    const tx = (await this.#open()).transaction([strokes, meta], "readwrite");
+    for (const r of records) tx.objectStore(strokes).put(r);
+    changeSync(
+      tx,
+      (s) => queueAdds(s, records.map((r) => ({ kind: "strokes" as const, id: r.id }))),
+    );
+    await done(tx);
   }
 
   /** Queue records for the next sync (a no-op while sync is off). */

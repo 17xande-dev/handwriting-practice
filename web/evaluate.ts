@@ -96,6 +96,8 @@ export interface CheckDetail {
   modelRight: number[];
   /** Per letter: pieces of the model skeleton with at least `minPieceFraction * S` pixels. */
   components: number[];
+  /** Where each model character starts in analysis columns (one more than characters); stroke order reads it. */
+  modelBounds: number[];
 }
 
 /** Smallest skeleton piece that counts, as a fraction of S pixels. */
@@ -502,6 +504,7 @@ export function checkWithModel(raster: ModelRaster, strokes: Stroke[]): CheckRes
     modelLeft,
     modelRight,
     components: skeletonComponentCounts(modelSkel, letterOf, letterCols),
+    modelBounds: bounds,
   };
 
   // The overlay, in the user's (deslanted) frame: for each column the user
@@ -617,7 +620,7 @@ function trace(m: ModelRender): Stroke[] {
  * Map x through matching breakpoints `from` → `to`, linearly between them and
  * with a slope of 1 beyond the ends. Zero-width spans map to their start.
  */
-function piecewise(from: number[], to: number[], x: number): number {
+export function piecewise(from: number[], to: number[], x: number): number {
   const n = from.length;
   if (x <= from[0]) return to[0] + (x - from[0]);
   if (x >= from[n - 1]) return to[n - 1] + (x - from[n - 1]);

@@ -23,6 +23,13 @@ import {
   shapeDetail,
 } from "./metrics.ts";
 import { type FluencyMetrics, fluencyMetrics, type PenMetrics, penMetrics } from "./pen-metrics.ts";
+import {
+  type OrderInput,
+  type OrderMetrics,
+  orderMetrics,
+  orderRecord,
+  type StrokeLookup,
+} from "./stroke-order.ts";
 
 /** 0-100 sub-scores. `shape` is the line score; the others are absent when nothing could be measured. */
 export interface SubScores {
@@ -30,6 +37,8 @@ export interface SubScores {
   consistency?: number;
   penControl?: number;
   fluency?: number;
+  /** Stroke order and direction (docs/strokes.md); absent where the model font has no strokes for the line. */
+  order?: number;
 }
 
 export interface LineMetrics {
@@ -37,8 +46,10 @@ export interface LineMetrics {
   consistency: ConsistencyMetrics;
   pen: PenMetrics;
   fluency: FluencyMetrics;
+  /** Stroke order and direction; absent when no letter of the line had model strokes. */
+  order?: OrderMetrics;
   scores: SubScores;
-  /** At most two notes on the worst non-shape issues, worst first. */
+  /** At most two notes on the worst non-shape issues, worst first, then up to two on stroke order. */
   notes: string[];
   /** Written letters (not missing) the rates are per. */
   letters: number;
@@ -205,7 +216,27 @@ export function pickNotes(cs: Component[]): string[] {
     .slice(0, 2).map((x) => x.c.note);
 }
 
-export function lineMetrics(text: string, strokes: Stroke[], r: CheckResult): LineMetrics {
+/** What stroke order needs from a check (docs/strokes.md, `OrderInput(result:)`). */
+export function orderInputOf(r: CheckResult): OrderInput {
+  return {
+    uMin: r.frame.uMin,
+    tan: r.frame.tan,
+    userBounds: r.userBounds,
+    modelBounds: r.detail.modelBounds,
+    letters: r.letters.map((l) => ({ index: l.index, char: l.char, missing: l.missing })),
+    letterSize: r.detail.letterSize,
+    letterBottom: r.detail.letterBottom,
+    // A line too short to measure has no slant difference (NaN): no correction.
+    slantDiff: Number.isFinite(r.metrics.slantDiff) ? r.metrics.slantDiff : 0,
+  };
+}
+
+export function lineMetrics(
+  text: string,
+  strokes: Stroke[],
+  r: CheckResult,
+  strokeModels: StrokeLookup | null = null,
+): LineMetrics {
   const written = r.letters.map((_, i) => i).filter((i) => !r.letters[i].missing);
   const pieces = written.reduce((a, i) => a + r.detail.components[i], 0);
   const cons = consistencyMetrics(text, strokes, r);
@@ -219,13 +250,16 @@ export function lineMetrics(text: string, strokes: Stroke[], r: CheckResult): Li
   set("consistency", groupScore(cs, "consistency"));
   set("penControl", groupScore(cs, "pen"));
   set("fluency", groupScore(cs, "fluency"));
+  const order = strokeModels ? orderMetrics(strokes, orderInputOf(r), strokeModels) : null;
+  if (order) scores.order = order.score;
   return {
     shape: shapeDetail(strokes, r),
     consistency: cons,
     pen,
     fluency: flu,
+    ...(order ? { order } : {}),
     scores,
-    notes: pickNotes(cs),
+    notes: [...pickNotes(cs), ...(order?.notes ?? [])],
     letters: written.length,
   };
 }
@@ -384,6 +418,7 @@ export function metrics2Of(m: LineMetrics, letters: LetterResult[]): Record<stri
   if (m.scores.consistency !== undefined) scores.consistency = m.scores.consistency;
   if (m.scores.penControl !== undefined) scores.pen = m.scores.penControl;
   if (m.scores.fluency !== undefined) scores.fluency = m.scores.fluency;
+  if (m.scores.order !== undefined) scores.order = m.scores.order;
   return {
     v: 1,
     shape,
@@ -421,6 +456,8 @@ export function metrics2Of(m: LineMetrics, letters: LetterResult[]): Record<stri
     },
     scores,
     notes: m.notes,
+    // Omitted, never null, when no letter was judged.
+    ...(m.order ? { order: orderRecord(m.order) } : {}),
   };
 }
 
