@@ -22,6 +22,25 @@
         </svg>
         <span class="tile-label">Edged nib</span>
       </label>
+      <label class="tile">
+        <input type="radio" name="pen" value="pointed">
+        <svg class="tile-art" viewBox="0 0 40 40" aria-hidden="true">
+          <path d="M20 4 L26 18 L23 26 L20 36 L17 26 L14 18 Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M23 26 L20 36 L17 26 Z" fill="currentColor"/>
+          <circle cx="20" cy="19" r="1.8" fill="currentColor"/>
+        </svg>
+        <span class="tile-label">Pointed nib</span>
+      </label>
+      <label class="tile">
+        <input type="radio" name="pen" value="pencil">
+        <svg class="tile-art" viewBox="0 0 40 40" aria-hidden="true">
+          <path d="M9 31 L8 35 L12 34 L32 14 L28 10 Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M9 31 L8 35 L12 34 Z" fill="currentColor"/>
+          <path d="M26 12 L30 16" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M30 8 L34 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span class="tile-label">Pencil</span>
+      </label>
     </fieldset>
 
     <figure class="preview">
@@ -52,7 +71,7 @@
     </div>
 
     <div class="sliders">
-      <label class="slider" data-pen="monoline">
+      <label class="slider" data-pen="monoline pointed">
         <span class="slider-name">Weight</span>
         <svg class="slider-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20 L20 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         <input type="range" name="weight" min="1" max="5" step="0.5" value="3">
@@ -74,6 +93,25 @@
           <line id="angle-nib" x1="-9" y1="0" x2="9" y2="0" stroke="currentColor" stroke-width="3" stroke-linecap="round" transform="rotate(-45)"/>
         </svg>
         <output name="angleOut">45°</output>
+      </label>
+      <label class="slider" data-pen="edged" hidden>
+        <span class="slider-name">Swell</span>
+        <input type="checkbox" name="swell">
+        <span>with pressure</span>
+      </label>
+      <label class="slider" data-pen="pencil" hidden>
+        <span class="slider-name">Lead</span>
+        <svg class="slider-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20 L20 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <input type="range" name="lead" min="1" max="5" step="0.5" value="3">
+        <svg class="slider-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19 L19 5" stroke="currentColor" stroke-width="5" stroke-linecap="round"/></svg>
+        <output name="leadOut">lead 3</output>
+      </label>
+      <label class="slider">
+        <span class="slider-name">Pressure</span>
+        <span class="slider-word" aria-hidden="true">light</span>
+        <input type="range" name="pressure" min="0.3" max="0.7" step="0.05" value="0.45" title="How hard you press to reach full pressure: light if you write with a feather touch, firm if the line swells too easily">
+        <span class="slider-word" aria-hidden="true">firm</span>
+        <output name="pressureOut">medium</output>
       </label>
       <label class="slider">
         <span class="slider-name">Size</span>

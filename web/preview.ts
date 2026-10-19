@@ -65,7 +65,9 @@ export function drawPreview(
   const points: Point[] = path.map(([u, v], i) => {
     const prev = path[Math.max(0, i - 1)];
     const down = v - prev[1] > 0.01;
-    return { u: 1.8 + u - v * tan, v, p: down ? 0.75 : 0.35, t: i };
+    // Raw pressures of a firm and a light touch of a Pencil (the iPad's normal is 0.12-0.15).
+    // Altitude and azimuth are those of a pencil held in a right hand, for the pencil pen.
+    return { u: 1.8 + u - v * tan, v, p: down ? 0.3 : 0.12, t: i, alt: 0.9, az: 0.6 };
   });
   const stroke: Stroke = { pen, points };
   drawStroke(ctx, b, stroke, ink);

@@ -152,7 +152,8 @@ const byteLength = (s: string) => utf8.encode(s).length;
 const round4 = (x: number) => Math.round(x * 10000) / 10000;
 
 function samePen(a: Pen2, b: Pen2): boolean {
-  return a.kind === b.kind && a.weight === b.weight && a.nibs === b.nibs && a.angle === b.angle;
+  return a.kind === b.kind && a.weight === b.weight && a.nibs === b.nibs && a.angle === b.angle &&
+    a.lead === b.lead && (a.swell === true) === (b.swell === true);
 }
 
 export interface Encoded {
@@ -182,7 +183,9 @@ export function encodeInk(
   const origin = first.points[0].t;
   const id = `${checkId}-ink`;
   if (byteLength(id) > 64 || !Number.isFinite(at)) return null;
-  if ([pen.weight, pen.nibs, pen.angle].some((x) => x !== undefined && !Number.isFinite(x))) {
+  if (
+    [pen.weight, pen.nibs, pen.angle, pen.lead].some((x) => x !== undefined && !Number.isFinite(x))
+  ) {
     return null;
   }
   const longest = Math.max(...strokes.map((s) => s.points.length));
@@ -229,16 +232,29 @@ const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFin
 function readPen2(x: unknown): Pen2 | null {
   if (!isObj(x) || typeof x.kind !== "string" || x.kind === "") return null;
   const p: Pen2 = { kind: x.kind, input: typeof x.input === "string" ? x.input : "touch" };
-  for (const k of ["weight", "nibs", "angle"] as const) if (isNum(x[k])) p[k] = x[k];
+  for (const k of ["weight", "nibs", "angle", "lead"] as const) if (isNum(x[k])) p[k] = x[k];
   if (typeof x.followsRoll === "boolean") p.followsRoll = x.followsRoll;
+  if (x.swell === true) p.swell = true;
   return p;
 }
 
-/** The drawing pen of a pen object: missing edged `nibs`/`angle` default to 5/45, a missing `weight` to 3. */
+/**
+ * The drawing pen of a pen object: missing edged `nibs`/`angle` default to 5/45, a missing `weight`
+ * to 3, `lead` to 3, `swell` to false; an unknown kind draws as monoline.
+ */
 export function penOf(p: Pen2): Pen {
-  return p.kind === "edged"
-    ? { kind: "edged", nibs: p.nibs ?? 5, angle: p.angle ?? 45 }
-    : { kind: "monoline", weight: p.weight ?? 3 };
+  switch (p.kind) {
+    case "edged":
+      return p.swell === true
+        ? { kind: "edged", nibs: p.nibs ?? 5, angle: p.angle ?? 45, swell: true }
+        : { kind: "edged", nibs: p.nibs ?? 5, angle: p.angle ?? 45 };
+    case "pointed":
+      return { kind: "pointed", weight: p.weight ?? 3 };
+    case "pencil":
+      return { kind: "pencil", lead: p.lead ?? 3 };
+    default:
+      return { kind: "monoline", weight: p.weight ?? 3 };
+  }
 }
 
 /**

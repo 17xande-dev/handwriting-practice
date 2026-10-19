@@ -20,6 +20,8 @@
 // "Finger draws" in the toolbar lets one finger (or a mouse) write instead,
 // for testing on a desktop.
 
+import { neutralPressure } from "./pens.ts";
+
 /** A raw sample in canvas CSS pixels. */
 export interface Sample {
   x: number;
@@ -60,8 +62,9 @@ function sample(e: PointerEvent, rect: DOMRect): Sample {
   const s: Sample = {
     x: e.clientX - rect.left,
     y: e.clientY - rect.top,
-    // Mouse and touch report 0.5 or 0 while pressed; only a stylus has real pressure.
-    p: e.pointerType === "pen" ? e.pressure : 0.5,
+    // Mouse and touch report 0.5 or 0 while pressed; only a stylus has real pressure. Without
+    // one the pen is drawn at a normal touch, as on the iPad.
+    p: e.pointerType === "pen" && Number.isFinite(e.pressure) ? e.pressure : neutralPressure,
     t: e.timeStamp,
   };
   // Safari reports altitude and azimuth directly; other browsers may only have tilt.

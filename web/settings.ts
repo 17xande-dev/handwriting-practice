@@ -4,6 +4,7 @@
 // (private browsing, blocked storage).
 
 import type { Pen } from "./ink.ts";
+import { pressureUpperDefault, pressureUpperRange } from "./pens.ts";
 
 export interface Settings {
   pen: Pen;
@@ -20,6 +21,8 @@ export interface Settings {
   /** The Google Fonts family typed in for the "custom" model. */
   customFont: string;
   touchWrites: boolean;
+  /** The raw pressure at which a stroke reaches full pressure (light 0.3 ... firm 0.7). */
+  pressure: number;
 }
 
 const storageKey = "italic-practice:toolbar:v2";
@@ -124,8 +127,18 @@ export class Toolbar {
       const n = Number(v);
       return v !== null && v !== "" && Number.isFinite(n) ? n : d;
     };
-    const pen: Pen = f.get("pen") === "edged"
-      ? { kind: "edged", nibs: num("nibs", 5), angle: num("angle", 45) }
+    const kind = f.get("pen");
+    const pen: Pen = kind === "edged"
+      ? {
+        kind: "edged",
+        nibs: num("nibs", 5),
+        angle: num("angle", 45),
+        ...(f.get("swell") === "on" ? { swell: true } : {}),
+      }
+      : kind === "pointed"
+      ? { kind: "pointed", weight: num("weight", 3) }
+      : kind === "pencil"
+      ? { kind: "pencil", lead: num("lead", 3) }
       : { kind: "monoline", weight: num("weight", 3) };
     const models = this.#inputs().filter((e) => e.name === "model");
     const model = models.find((e) => e.checked) ?? models[0];
@@ -139,6 +152,10 @@ export class Toolbar {
       slant: custom ? num("customSlant", 0) : Number(model?.dataset.slant ?? 0) || 0,
       customFont: String(f.get("customFont") ?? "").trim(),
       touchWrites: f.get("finger") === "on",
+      pressure: Math.min(
+        pressureUpperRange[1],
+        Math.max(pressureUpperRange[0], num("pressure", pressureUpperDefault)),
+      ),
     };
   }
 
@@ -146,7 +163,8 @@ export class Toolbar {
   #sync() {
     const s = this.read();
     for (const el of this.#form.querySelectorAll<HTMLElement>("[data-pen]")) {
-      el.hidden = el.dataset.pen !== s.pen.kind;
+      // A control may serve several pens: data-pen="monoline pointed".
+      el.hidden = !(el.dataset.pen ?? "").split(" ").includes(s.pen.kind);
     }
     for (const el of document.querySelectorAll<HTMLElement>("[data-model]")) {
       el.hidden = el.dataset.model !== s.model;
@@ -166,6 +184,8 @@ export class Toolbar {
       const o = this.#form.elements.namedItem(name);
       if (o instanceof HTMLOutputElement) o.value = text;
     };
+    if (s.pen.kind === "pencil") out("leadOut", `lead ${s.pen.lead}`);
+    out("pressureOut", s.pressure < 0.4 ? "light" : s.pressure > 0.55 ? "firm" : "medium");
     if (s.pen.kind === "edged") {
       out("nibsOut", `${s.pen.nibs} nibs`);
       out("angleOut", `${s.pen.angle}°`);

@@ -281,6 +281,8 @@ span.tile-art {
   text-align: center;
 }
 
+.slider-word { flex: none; font-size: 0.8rem; }
+
 .size-small, .size-large {
   font-family: var(--ref-font);
   line-height: 1;

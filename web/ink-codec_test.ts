@@ -8,6 +8,7 @@ import { assert, assertEquals } from "@std/assert";
 import { decimate, decodeInk, encodeInk, roundTripError } from "./ink-codec.ts";
 import { canonical, type J, parseStroke, same, strokeJson } from "./golden-util.ts";
 import type { Stroke } from "./ink.ts";
+import { legacyPenKind } from "./metric-scores.ts";
 import ink from "../testdata/metrics/ink.json" with { type: "json" };
 import inkDecode from "../testdata/metrics/ink-decode.json" with { type: "json" };
 
@@ -57,15 +58,65 @@ Deno.test("golden: decoding malformed ink never throws", () => {
   assertEquals(decodeInk(" ".repeat(70_000)), null);
 });
 
-Deno.test("ink: a forward-compatible pen kind decodes as a monoline pen", () => {
+Deno.test("ink: an unknown pen kind decodes as a monoline pen; pointed and pencil default their size", () => {
   const rec = {
     v: 1,
     id: "a-ink",
     ts: 1,
     check: "a",
-    pen: { kind: "pointed", input: "pencil" },
+    pen: { kind: "quill", input: "pencil" },
     strokes: [{ fr: false, rr: null, t0: 0, o: [0, 0], d: "" }],
   };
   const got = decodeInk(rec);
   assertEquals(got?.[0].pen, { kind: "monoline", weight: 3 });
+  const p = decodeInk({ ...rec, pen: { kind: "pointed", input: "pencil" } });
+  assertEquals(p?.[0].pen, { kind: "pointed", weight: 3 });
+  const l = decodeInk({ ...rec, pen: { kind: "pencil", input: "pencil" } });
+  assertEquals(l?.[0].pen, { kind: "pencil", lead: 3 });
+});
+
+Deno.test("pointed and pencil pens round-trip through the record; top-level pen2 and stroke pen differ", () => {
+  const pts = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      u: i * 0.05,
+      v: 0,
+      p: 0.3,
+      t: i * 10,
+      alt: 0.8,
+      az: 1.2,
+      force: 0.3,
+    }));
+  const strokes: Stroke[] = [
+    { pen: { kind: "pointed", weight: 4 }, points: pts(6) },
+    { pen: { kind: "pencil", lead: 2 }, points: pts(6) },
+  ];
+  const e = encodeInk(strokes, "c1", 1000, 32);
+  assert(e);
+  assertEquals(e.record.pen.kind, "pencil");
+  assertEquals(e.record.pen.lead, 2);
+  assertEquals(e.record.strokes[0].pen?.kind, "pointed");
+  assertEquals(e.record.strokes[0].pen?.weight, 4);
+  assertEquals(e.record.strokes[1].pen, undefined);
+  const dec = decodeInk(e.json)!;
+  assertEquals(dec[0].pen, { kind: "pointed", weight: 4 });
+  assertEquals(dec[1].pen, { kind: "pencil", lead: 2 });
+  assert(dec[1].points[0].alt !== undefined && dec[1].points[0].az !== undefined);
+});
+
+Deno.test("edged swell is carried by pen2 and the record, and differs from plain edged", () => {
+  const p = [{ u: 0, v: 0, p: 0.2, t: 0 }, { u: 0.1, v: 0, p: 0.2, t: 5 }];
+  const strokes: Stroke[] = [
+    { pen: { kind: "edged", nibs: 5, angle: 45 }, points: p },
+    { pen: { kind: "edged", nibs: 5, angle: 45, swell: true }, points: p },
+  ];
+  const e = encodeInk(strokes, "c2", 1000, 32)!;
+  assertEquals(e.record.pen.swell, true);
+  assertEquals(e.record.strokes[0].pen?.swell, undefined);
+  assertEquals(e.record.strokes[0].pen?.kind, "edged");
+  const dec = decodeInk(e.json)!;
+  assertEquals(dec[0].pen, { kind: "edged", nibs: 5, angle: 45 });
+  assertEquals(dec[1].pen, { kind: "edged", nibs: 5, angle: 45, swell: true });
+  assertEquals(legacyPenKind(strokes), "edged");
+  assertEquals(legacyPenKind([{ pen: { kind: "pencil", lead: 3 }, points: p }]), "monoline");
+  assertEquals(legacyPenKind([{ pen: { kind: "pointed", weight: 3 }, points: p }]), "monoline");
 });

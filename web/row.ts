@@ -5,15 +5,16 @@ import { type Band, band, toUnits } from "./geometry.ts";
 import { drawGuides, type GuideColors } from "./guides.ts";
 import { check, type CheckResult, colouredRuns, deviationColors, drawOverlay } from "./evaluate.ts";
 import { renderPanel, scoreClass, subScoreLine } from "./details.ts";
-import { type LineMetrics, lineMetrics } from "./metric-scores.ts";
+import { legacyPenKind, type LineMetrics, lineMetrics } from "./metric-scores.ts";
 import { Replay, type ReplayMode } from "./replay.ts";
 import { drawWorstSegment } from "./worst.ts";
-import { drawStroke, type Point, type Stroke } from "./ink.ts";
+import { drawStroke, drawStrokeClasses, drawsWhole, type Point, type Stroke } from "./ink.ts";
 import { type FontInfo, fontString } from "./measure.ts";
 import type { History } from "./history.ts";
 import { attachPen, type Sample } from "./pen.ts";
 import { eraserTolerance, strokesHit, type UV } from "./eraser.ts";
 import type { Settings } from "./settings.ts";
+import { fingerprint, type Recorded } from "./stroke-store.ts";
 
 export interface Theme {
   guides: GuideColors;
@@ -86,17 +87,24 @@ export class Row {
   /**
    * Called with a check worth keeping in the progress history: the first
    * check of each version of the writing. Checking again without writing
-   * anything new isn't another attempt.
+   * anything new isn't another attempt, not even after a reload (the writing is
+   * recognised by its fingerprint, which is saved with it).
    */
   onRecord: (r: CheckResult, pen: string, m: LineMetrics, strokes: Stroke[]) => void = () => {};
   /** Called with the line's writing after every change to it (the caller debounces its saving). */
   onStrokes: (strokes: Stroke[]) => void = () => {};
-  /** Bumped whenever the writing changes; the version last recorded. */
-  #version = 0;
-  #recorded = -1;
+  /** The writing (and model) last recorded as a check, and that check's id once it is stored. */
+  #recorded: Recorded | null = null;
   #strokes: Stroke[] = [];
   #live: Stroke | null = null;
   #predicted: Point[] = [];
+  /**
+   * The finished part of the stroke being written, so a frame draws only its tail: segments
+   * `#liveDone` of `#liveFor` and before are already on this surface.
+   */
+  #liveLayer: Surface;
+  #liveFor: Stroke | null = null;
+  #liveDone = 0;
   #frame = 0;
 
   #settings: () => Settings;
@@ -122,6 +130,7 @@ export class Row {
     this.#ref = surface(el.querySelector(".reference canvas") as HTMLCanvasElement);
     this.#practice = surface(el.querySelector(".practice canvas") as HTMLCanvasElement);
     this.#base = surface(document.createElement("canvas"));
+    this.#liveLayer = surface(document.createElement("canvas"));
     // The replay's canvas lies over the practice line and never takes the pen.
     const replayCanvas = document.createElement("canvas");
     replayCanvas.className = "replay";
@@ -267,6 +276,8 @@ export class Row {
     resize(this.#practice, b);
     resize(this.#replaySurface, b);
     resize(this.#base, b);
+    resize(this.#liveLayer, b);
+    this.#liveFor = null;
 
     drawGuides(this.#ref.ctx, b, this.#theme.guides, this.#slant);
     this.#ref.ctx.font = fontString(font, fitted / font.xRatio);
@@ -314,9 +325,28 @@ export class Row {
     return this.#band?.xh ?? 0;
   }
 
+  /** Draw the writing again (the pressure calibration changed). */
+  redraw() {
+    this.#rebuildBase();
+    this.#draw();
+  }
+
+  /** What was last recorded as a check, to be saved with the writing. */
+  get recorded(): Recorded | null {
+    return this.#recorded;
+  }
+
+  /** The stored id of the check just recorded; the row's writing is saved again with it. */
+  noteRecorded(check: string) {
+    if (!this.#recorded) return;
+    this.#recorded = { ...this.#recorded, check };
+    this.onStrokes(this.#strokes);
+  }
+
   /** Put back writing saved earlier, unless something has been written since. */
-  restore(strokes: Stroke[]) {
+  restore(strokes: Stroke[], recorded: Recorded | null = null) {
     if (this.#strokes.length || strokes.length === 0) return;
+    this.#recorded = recorded;
     this.#restoring = true;
     this.#setStrokes(strokes);
     this.#restoring = false;
@@ -336,14 +366,10 @@ export class Row {
     this.#result = check(this.#text, this.#font, this.#strokes);
     this.#metrics = this.#result ? lineMetrics(this.#text, this.#strokes, this.#result) : null;
     this.#showResult = true;
-    if (this.#result && this.#metrics && this.#recorded !== this.#version) {
-      this.#recorded = this.#version;
-      this.onRecord(
-        this.#result,
-        this.#strokes[this.#strokes.length - 1].pen.kind,
-        this.#metrics,
-        this.#strokes,
-      );
+    const fp = fingerprint(this.#strokes, this.#font);
+    if (this.#result && this.#metrics && this.#recorded?.fp !== fp) {
+      this.#recorded = { fp, check: "" };
+      this.onRecord(this.#result, legacyPenKind(this.#strokes), this.#metrics, this.#strokes);
     }
     this.#renderResult();
     this.#rebuildBase();
@@ -549,9 +575,8 @@ export class Row {
     const n = this.#strokes.length;
     this.#clear.disabled = n === 0;
     this.#check.disabled = n === 0;
-    // Anything written, undone or cleared makes the last check stale, and
-    // makes the next check a new attempt.
-    this.#version++;
+    // Anything written, undone or cleared makes the last check stale; a check of different
+    // writing is a new attempt (see `#recorded`).
     this.#replay.stop();
     this.#clearResult();
     // Exposed for tests and the browser console; not used by the app itself.
@@ -578,6 +603,12 @@ export class Row {
     // writing coloured by how far each part is from the model.
     drawOverlay(ctx, b, r);
     this.#strokes.forEach((s, i) => {
+      // Pointed and pencil strokes are drawn whole (their widths, taper and grain belong to the
+      // stroke); the others in runs of one class.
+      if (drawsWhole(s.pen)) {
+        drawStrokeClasses(ctx, b, s, r.pointClass[i], deviationColors);
+        return;
+      }
       for (const run of colouredRuns(s, r.pointClass[i])) {
         drawStroke(ctx, b, run.stroke, deviationColors[run.cls]);
       }
@@ -610,7 +641,28 @@ export class Row {
       const shown = this.#predicted.length
         ? { pen: this.#live.pen, points: [...this.#live.points, ...this.#predicted] }
         : this.#live;
-      drawStroke(ctx, b, shown, this.#theme.penInk);
+      // Only the tail is drawn each frame: segments no later point can change are kept on the
+      // live layer. A monoline segment's end depends on the next point, so the last real one waits.
+      const lctx = this.#liveLayer.ctx;
+      const ink = this.#theme.penInk;
+      if (this.#liveFor !== this.#live) {
+        lctx.save();
+        lctx.setTransform(1, 0, 0, 1, 0, 0);
+        lctx.clearRect(0, 0, this.#liveLayer.canvas.width, this.#liveLayer.canvas.height);
+        lctx.restore();
+        this.#liveFor = this.#live;
+        this.#liveDone = 0;
+      }
+      const stable = Math.max(0, this.#live.points.length - 2);
+      if (stable > this.#liveDone) {
+        drawStroke(lctx, b, this.#live, ink, this.#liveDone, true, stable);
+        this.#liveDone = stable;
+      }
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(this.#liveLayer.canvas, 0, 0);
+      ctx.restore();
+      drawStroke(ctx, b, shown, ink, this.#liveDone, true);
     }
   }
 }

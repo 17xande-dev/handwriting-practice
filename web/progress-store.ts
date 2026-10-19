@@ -47,6 +47,8 @@ export interface Pen2Record {
   nibs?: number;
   angle?: number;
   followsRoll?: boolean;
+  lead?: number;
+  swell?: boolean;
   /** "pencil" or "touch". */
   input: string;
 }
@@ -142,8 +144,10 @@ export interface ProgressStore {
   clear(): Promise<void>;
   /** The writing on a sheet row, kept on this device (never synced) so it survives a reload. */
   loadStrokes(key: string): Promise<unknown>;
-  /** Keep (or, with null, forget) the writing of a row. */
-  saveStrokes(key: string, strokes: unknown | null): Promise<void>;
+  /** A row's writing with what was recorded from it (see stroke-store.ts `Recorded`), both unchecked. */
+  loadWriting(key: string): Promise<{ strokes: unknown; recorded: unknown }>;
+  /** Keep (or, with null, forget) the writing of a row, with the check last recorded from it. */
+  saveStrokes(key: string, strokes: unknown | null, recorded?: unknown): Promise<void>;
   /** Store the ink of a checked attempt. */
   addInk(r: InkRecord): Promise<void>;
   allInk(): Promise<InkRecord[]>;
@@ -377,14 +381,19 @@ export function freshSyncState(email: string): SyncState {
 const dbName = "italic-practice";
 // Version 2 adds the id index on checks, the ink and meta stores, and gives
 // every existing check its identity. Version 3 adds the store of what is
-// written on each sheet row.
-const dbVersion = 3;
+// written on each sheet row. Version 4 indexes the ink records by ts, so the oldest can be pruned.
+const dbVersion = 4;
 const checks = "checks";
 const ink = "ink";
 const meta = "meta";
 const writing = "writing";
 /** Rows of writing kept on this device; the least recently written go first. */
 export const maxWritingRows = 300;
+/**
+ * Ink records kept on this device (the latest by ts); older ones are dropped locally. A pruned
+ * record is never queued for deletion: the server and the iPad keep theirs.
+ */
+export const maxInkRecords = 2000;
 const syncKey = "sync";
 
 function open(): Promise<IDBDatabase> {
@@ -418,6 +427,7 @@ function open(): Promise<IDBDatabase> {
         };
       }
       if (ev.oldVersion < 3) db.createObjectStore(writing);
+      if (ev.oldVersion < 4) tx.objectStore(ink).createIndex("ts", "ts");
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -437,6 +447,22 @@ function result<T>(req: IDBRequest<T>): Promise<T> {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+/** Inside an open transaction on the ink store: delete the oldest records beyond `keep`. Queues nothing. */
+function pruneInk(tx: IDBTransaction, keep = maxInkRecords): void {
+  const index = tx.objectStore(ink).index("ts");
+  index.count().onsuccess = (e) => {
+    let excess = (e.target as IDBRequest<number>).result - keep;
+    if (excess <= 0) return;
+    index.openCursor().onsuccess = (ev) => {
+      const cur = (ev.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (!cur || excess <= 0) return;
+      cur.delete();
+      excess--;
+      cur.continue();
+    };
+  };
 }
 
 /** Read-modify-write the sync state inside a transaction that is already open. */
@@ -511,19 +537,24 @@ export class DeviceStore implements ProgressStore, SyncStore {
   }
 
   async loadStrokes(key: string): Promise<unknown> {
+    return (await this.loadWriting(key)).strokes;
+  }
+
+  async loadWriting(key: string): Promise<{ strokes: unknown; recorded: unknown }> {
     const tx = (await this.#open()).transaction(writing, "readonly");
     const req = tx.objectStore(writing).get(key);
     await done(tx);
-    return (req.result as { strokes?: unknown } | undefined)?.strokes ?? null;
+    const v = req.result as { strokes?: unknown; recorded?: unknown } | undefined;
+    return { strokes: v?.strokes ?? null, recorded: v?.recorded ?? null };
   }
 
-  async saveStrokes(key: string, strokes: unknown | null): Promise<void> {
+  async saveStrokes(key: string, strokes: unknown | null, recorded?: unknown): Promise<void> {
     const tx = (await this.#open()).transaction(writing, "readwrite");
     const s = tx.objectStore(writing);
     if (strokes === null) {
       s.delete(key);
     } else {
-      s.put({ at: Date.now(), strokes }, key);
+      s.put({ at: Date.now(), strokes, ...(recorded ? { recorded } : {}) }, key);
       // Keep the store bounded: forget the rows written longest ago.
       const all: Array<[IDBValidKey, number]> = [];
       s.openCursor().onsuccess = (e) => {
@@ -544,6 +575,7 @@ export class DeviceStore implements ProgressStore, SyncStore {
     const tx = (await this.#open()).transaction([ink, meta], "readwrite");
     tx.objectStore(ink).put(r);
     changeSync(tx, (s) => queueAdds(s, [{ kind: "ink", id: r.id }]));
+    pruneInk(tx);
     await done(tx);
   }
 
@@ -630,6 +662,7 @@ export class DeviceStore implements ProgressStore, SyncStore {
     if (!fresh.length) return 0;
     const tx = (await this.#open()).transaction(ink, "readwrite");
     for (const r of fresh) tx.objectStore(ink).put(r);
+    pruneInk(tx);
     await done(tx);
     return fresh.length;
   }

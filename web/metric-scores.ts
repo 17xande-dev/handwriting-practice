@@ -326,6 +326,10 @@ export interface Pen2 {
   nibs?: number;
   angle?: number;
   followsRoll?: boolean;
+  /** Pencil only: the lead, 1-5. */
+  lead?: number;
+  /** Edged only, and only when the pressure swell is on. */
+  swell?: true;
   /** "pencil" (a force was reported) or "touch". */
   input: string;
 }
@@ -340,14 +344,24 @@ export function pen2Of(strokes: Stroke[]): Pen2 | null {
   const input = strokes.some((s) => s.points.some((p) => p.force !== undefined))
     ? "pencil"
     : "touch";
-  if (last.pen.kind === "monoline") return { kind: "monoline", weight: last.pen.weight, input };
+  const pen = last.pen;
+  if (pen.kind === "monoline" || pen.kind === "pointed") {
+    return { kind: pen.kind, weight: pen.weight, input };
+  }
+  if (pen.kind === "pencil") return { kind: "pencil", lead: pen.lead, input };
   return {
     kind: "edged",
-    nibs: last.pen.nibs,
-    angle: last.pen.angle,
+    nibs: pen.nibs,
+    angle: pen.angle,
     followsRoll: strokes.some((s) => s.followsRoll === true),
+    ...(pen.swell === true ? { swell: true as const } : {}),
     input,
   };
+}
+
+/** The progress record's top-level `pen`: pointed and pencil are written as monoline, for old readers. */
+export function legacyPenKind(strokes: Stroke[]): "monoline" | "edged" {
+  return strokes[strokes.length - 1]?.pen.kind === "edged" ? "edged" : "monoline";
 }
 
 /** The metrics2 member of a check record: every NaN is null, optional members omitted. */

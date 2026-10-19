@@ -5,7 +5,8 @@ import { modelStrokes, renderModelRaster } from "./evaluate.ts";
 import { sheetScoreLine } from "./details.ts";
 import { encodeInk } from "./ink-codec.ts";
 import { lineCheckOf, metrics2Of, pen2Of, summarise } from "./metric-scores.ts";
-import { rowKey, sanitizeStrokes } from "./stroke-store.ts";
+import { rowKey, sanitizeRecorded, sanitizeStrokes } from "./stroke-store.ts";
+import { setPressureUpper } from "./pens.ts";
 import { familyList, loadGoogleFont, validFamilyName } from "./googlefont.ts";
 import { History } from "./history.ts";
 import { measureFont, measureSlant } from "./measure.ts";
@@ -60,6 +61,7 @@ function main() {
   };
 
   const toolbar = new Toolbar(form);
+  setPressureUpper(toolbar.read().pressure);
   const history = new History();
   attachHistory(history);
   const area = document.getElementById("writing-area") ?? rowsEl;
@@ -161,6 +163,11 @@ function main() {
   redrawPreview(toolbar.read());
 
   toolbar.onChange((now, before) => {
+    if (now.pressure !== before.pressure) {
+      // The calibration is a device setting, not stored in strokes: every row is drawn with it.
+      setPressureUpper(now.pressure);
+      for (const r of rows) r.redraw();
+    }
     redrawPreview(now);
     if (now.model !== before.model || now.style !== before.style) loadAndLayout();
     else if (now.xh !== before.xh || now.slant !== before.slant) layoutAll();
@@ -208,6 +215,7 @@ function main() {
         metrics2: metrics2Of(metrics, result.letters) as unknown as Metrics2,
         ...(pen2 ? { pen2 } : {}),
       }).then(async (rec) => {
+        r.noteRecorded(rec.id);
         // One ink record per recorded check, so the attempt can be shown again (and replayed
         // on the iPad); it syncs like the check does.
         const enc = encodeInk(strokes, rec.id, rec.at, xh);
@@ -231,18 +239,19 @@ function keepWriting(rows: Row[], sheet: string, store: DeviceStore) {
     clearTimeout(pending.get(i));
     pending.delete(i);
     const s = rows[i].strokes;
-    store.saveStrokes(rowKey(sheet, i, rows[i].text), s.length ? s : null).catch(() => {
-      // Storage unavailable: the writing just doesn't survive a reload.
-    });
+    store.saveStrokes(rowKey(sheet, i, rows[i].text), s.length ? s : null, rows[i].recorded)
+      .catch(() => {
+        // Storage unavailable: the writing just doesn't survive a reload.
+      });
   };
   rows.forEach((r, i) => {
     r.onStrokes = () => {
       clearTimeout(pending.get(i));
       pending.set(i, setTimeout(() => save(i), 600));
     };
-    store.loadStrokes(rowKey(sheet, i, r.text)).then((x) => r.restore(sanitizeStrokes(x))).catch(
-      () => {},
-    );
+    store.loadWriting(rowKey(sheet, i, r.text)).then((x) =>
+      r.restore(sanitizeStrokes(x.strokes), sanitizeRecorded(x.recorded))
+    ).catch(() => {});
   });
   const flush = () => [...pending.keys()].forEach(save);
   addEventListener("pagehide", flush);

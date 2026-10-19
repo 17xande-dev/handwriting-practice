@@ -84,6 +84,9 @@ export function writtenPoints(t: Timed, now: number): Point[] {
       u: a.u + (b.u - a.u) * f,
       v: a.v + (b.v - a.v) * f,
       p: a.p + (b.p - a.p) * f,
+      // The pencil's footprint follows the tilt, so the point in between carries it too.
+      ...(a.alt !== undefined && b.alt !== undefined ? { alt: a.alt + (b.alt - a.alt) * f } : {}),
+      ...(a.az !== undefined && b.az !== undefined ? { az: a.az + (b.az - a.az) * f } : {}),
     });
   }
   return pts;
@@ -112,7 +115,8 @@ export function drawReplayStroke(
   ink: string,
 ) {
   if (mode === "ink") {
-    drawStroke(ctx, b, { ...t.stroke, points: pts }, ink);
+    // A stroke still being written has no end taper yet (the pointed nib), as on the iPad.
+    drawStroke(ctx, b, { ...t.stroke, points: pts }, ink, 0, pts.length < t.stroke.points.length);
     return;
   }
   ctx.save();

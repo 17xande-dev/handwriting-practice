@@ -61,7 +61,9 @@ const round6 = (x: number) => Math.round(x * 1e6) / 1e6;
 export function strokeJson(s: Stroke) {
   const pen = s.pen.kind === "edged"
     ? { kind: "edged", nibs: s.pen.nibs, angle: s.pen.angle }
-    : { kind: "monoline", weight: s.pen.weight };
+    : s.pen.kind === "pencil"
+    ? { kind: "pencil", lead: s.pen.lead }
+    : { kind: s.pen.kind, weight: s.pen.weight };
   const o = (x: number | undefined) => x === undefined ? null : round6(x);
   return {
     pen,
