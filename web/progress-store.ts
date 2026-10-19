@@ -148,7 +148,7 @@ export interface InkRecord {
 
 /**
  * A person's stroke definitions for one font (iPad docs/strokes.md, "Sync"): `strokes-<fontId>`, or
- * `strokes-<fontId>-<n>` when split. Edited on the /strokes page (stroke-defs.ts) and synced as it came; unlike the other kinds
+ * `strokes-<fontId>~<n>` when split. Edited on the /strokes page (stroke-defs.ts) and synced as it came; unlike the other kinds
  * it is edited in place, so the greater `ts` wins (`newerRecords`).
  */
 export interface StrokesRecord {

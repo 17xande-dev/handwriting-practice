@@ -22,6 +22,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Kinds are the records the apps keep: a checked line, the quantized
@@ -61,6 +62,9 @@ type Store struct {
 
 func NewStore(db *sql.DB) *Store { return &Store{db: db} }
 
+// MaxTSAhead is how far past the server's clock a strokes or prefs record's ts may be.
+const MaxTSAhead = 24 * time.Hour
+
 // MaxIDBytes is the longest record id, in bytes of UTF-8.
 const MaxIDBytes = 64
 
@@ -95,7 +99,7 @@ func topLevel(raw json.RawMessage) (names []string, values map[string]json.RawMe
 
 // CheckRecord reports why raw cannot be stored as a record of kind, or nil, and
 // returns the record's id. The server checks only what syncing relies on: an
-// object with a string id (1-64 bytes of UTF-8) and a positive numeric ts, no
+// object with a string id (1-64 bytes of UTF-8) and a positive finite numeric ts (for strokes and prefs, at most a day ahead of the server's clock), no
 // two top-level names that differ only in case, and a size. The rest of the
 // shape belongs to the apps, which validate every record they read anyway.
 //
@@ -135,6 +139,11 @@ func CheckRecord(kind string, raw json.RawMessage) (string, error) {
 	var ts float64
 	if v := values["ts"]; v == nil || json.Unmarshal(v, &ts) != nil || !(ts > 0) || math.IsInf(ts, 0) {
 		return reject("ts must be a positive number")
+	}
+	// A mutable record wins by the greater ts, so one stamped far ahead would pin its id: no honest
+	// edit could ever replace it. Refuse a ts more than a day after the server's clock.
+	if (kind == "strokes" || kind == "prefs") && ts > float64(time.Now().Add(MaxTSAhead).UnixMilli()) {
+		return reject("ts in the future")
 	}
 	return id, nil
 }

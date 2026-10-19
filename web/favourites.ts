@@ -10,6 +10,10 @@
 
 import { validFamilyName } from "./googlefont.ts";
 
+/** The longest member id, in UTF-8 bytes (`google:` plus a 64-character family is 71). */
+export const maxIdBytes = 80;
+const utf8Bytes = (s: string) => new TextEncoder().encode(s).length;
+
 export const favouritesKey = "italic-practice:favourites:v1";
 export const prefsId = "prefs-favourites";
 
@@ -26,6 +30,12 @@ export interface FavouritesRecord {
   ts: number;
   v: number;
   favourites: Favourite[];
+  /**
+   * Optional. The entries an un-star took out of `favourites` (a catalogue family may have several,
+   * one per variant), kept so that starring the family again brings them all back. Same shape as
+   * `favourites`. The iPad keeps unknown members, so it preserves this one untouched.
+   */
+  removedVariants?: Favourite[];
   [field: string]: unknown;
 }
 
@@ -69,7 +79,7 @@ export function defaultRecord(groups: CatalogGroup[]): FavouritesRecord {
 
 function sanitizeEntry(x: unknown): Favourite | null {
   if (!isObj(x)) return null;
-  if (typeof x.id !== "string" || x.id === "" || x.id.length > 64) return null;
+  if (typeof x.id !== "string" || x.id === "" || utf8Bytes(x.id) > maxIdBytes) return null;
   if (typeof x.kind !== "string" || typeof x.family !== "string") return null;
   if ((x.kind === "google" || x.kind === "custom") && !validFamilyName(x.family)) return null;
   if (x.variant !== undefined && typeof x.variant !== "string") return null;
@@ -90,7 +100,13 @@ export function sanitizeRecord(x: unknown): FavouritesRecord | null {
   }
   const base = isObj(x) ? x : {};
   const ts = typeof base.ts === "number" && Number.isFinite(base.ts) && base.ts > 0 ? base.ts : 0;
-  return { ...base, id: prefsId, ts, v: 1, favourites };
+  const rec: FavouritesRecord = { ...base, id: prefsId, ts, v: 1, favourites };
+  if (Array.isArray(base.removedVariants)) {
+    rec.removedVariants = base.removedVariants.slice(0, 500).map(sanitizeEntry).filter((
+      f,
+    ): f is Favourite => f !== null);
+  } else delete rec.removedVariants;
+  return rec;
 }
 
 export function parseRecord(raw: string | null): FavouritesRecord | null {
@@ -179,7 +195,11 @@ export function isFavourite(rec: FavouritesRecord, t: Target, groups: CatalogGro
 /** A strictly later time than the record's own, so an edit always wins over what it replaced. */
 const nextTs = (rec: FavouritesRecord, now: number) => Math.max(now, rec.ts + 1);
 
-/** Star or unstar: removes every entry for the tile, or appends one. Other members stay. */
+/**
+ * Star or unstar. Un-starring removes every entry for the tile; a builtin family's entries are
+ * remembered in `removedVariants`, and starring it again appends them back (or, with none
+ * remembered, the family's first font). Other members stay.
+ */
 export function toggle(
   rec: FavouritesRecord,
   t: Target,
@@ -187,14 +207,25 @@ export function toggle(
   now = Date.now(),
 ): FavouritesRecord {
   const key = targetKey(t);
-  const present = rec.favourites.some((f) => resolveEntry(f, groups)?.key === key);
+  const keyOf = (f: Favourite) => resolveEntry(f, groups)?.key;
+  const present = rec.favourites.some((f) => keyOf(f) === key);
   let favourites: Favourite[];
+  let removedVariants = rec.removedVariants;
   if (present) {
-    favourites = rec.favourites.filter((f) => resolveEntry(f, groups)?.key !== key);
+    favourites = rec.favourites.filter((f) => keyOf(f) !== key);
+    if (t.kind === "builtin") {
+      const taken = rec.favourites.filter((f) => keyOf(f) === key);
+      removedVariants = [...(rec.removedVariants ?? []).filter((f) => keyOf(f) !== key), ...taken];
+    }
   } else if (t.kind === "builtin") {
     const g = groups.find((g) => g.name === t.group);
     if (!g || g.ids.length === 0) return rec;
-    favourites = [...rec.favourites, { id: g.ids[0], kind: "builtin", family: g.name }];
+    const back = (rec.removedVariants ?? []).filter((f) => keyOf(f) === key);
+    favourites = [
+      ...rec.favourites,
+      ...(back.length ? back : [{ id: g.ids[0], kind: "builtin", family: g.name }]),
+    ];
+    removedVariants = (rec.removedVariants ?? []).filter((f) => keyOf(f) !== key);
   } else {
     if (!validFamilyName(t.family)) return rec;
     favourites = [...rec.favourites, {
@@ -203,12 +234,16 @@ export function toggle(
       family: t.family,
     }];
   }
-  return { ...rec, ts: nextTs(rec, now), favourites };
+  const out: FavouritesRecord = { ...rec, ts: nextTs(rec, now), favourites };
+  if (removedVariants?.length) out.removedVariants = removedVariants;
+  else delete out.removedVariants;
+  return out;
 }
 
 /**
- * Move a favourite one place up (delta -1) or down (+1) among the visible ones. It swaps with its
- * neighbour; members that are not shown keep their places. At an end this changes nothing.
+ * Move a favourite one place up (delta -1) or down (+1) among the visible ones. All of its entries
+ * (a family may have several variants) move together, as a block, swapping places with the
+ * neighbour family's entries; members that are not shown keep their places. At an end this changes nothing.
  */
 export function move(
   rec: FavouritesRecord,
@@ -217,20 +252,26 @@ export function move(
   groups: CatalogGroup[],
   now = Date.now(),
 ): FavouritesRecord {
-  const shown: number[] = [];
-  const seen = new Set<string>();
+  const slots: number[] = [];
+  const keys: string[] = [];
   rec.favourites.forEach((f, i) => {
-    const r = resolveEntry(f, groups);
-    if (r && !seen.has(r.key)) {
-      seen.add(r.key);
-      shown.push(i);
+    const k = resolveEntry(f, groups)?.key;
+    if (k) {
+      slots.push(i);
+      keys.push(k);
     }
   });
-  const at = shown.findIndex((i) => resolveEntry(rec.favourites[i], groups)?.key === key);
+  const order = [...new Set(keys)];
+  const at = order.indexOf(key);
   const to = at + delta;
-  if (at < 0 || to < 0 || to >= shown.length) return rec;
+  if (at < 0 || to < 0 || to >= order.length) return rec;
+  [order[at], order[to]] = [order[to], order[at]];
+  // Each family's entries, in their own order, laid out family by family into the slots the
+  // resolvable entries held. Members that are not shown stay where they were.
+  const entries = slots.map((i) => rec.favourites[i]);
+  const laid = order.flatMap((k) => entries.filter((_, j) => keys[j] === k));
   const favourites = [...rec.favourites];
-  [favourites[shown[at]], favourites[shown[to]]] = [favourites[shown[to]], favourites[shown[at]]];
+  slots.forEach((slot, j) => favourites[slot] = laid[j]);
   return { ...rec, ts: nextTs(rec, now), favourites };
 }
 

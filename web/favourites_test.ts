@@ -186,3 +186,70 @@ Deno.test("reset restores the defaults as a newer edit", () => {
   assertEquals(names(back), names(defaultRecord(groups)));
   assertEquals(back.ts, 901);
 });
+
+const variants = (): ReturnType<typeof defaultRecord> => ({
+  id: prefsId,
+  ts: 5,
+  v: 1,
+  favourites: [
+    { id: "briem-print", kind: "builtin", family: "Briem Hand" },
+    { id: "gb-s", kind: "builtin", family: "Playwrite GB" },
+    { id: "upright", kind: "builtin", family: "Playwrite US" },
+    { id: "gb-j", kind: "builtin", family: "Playwrite GB" },
+  ],
+});
+
+Deno.test("un-starring a family with variants and starring it again restores every variant", () => {
+  const off = toggle(variants(), { kind: "builtin", group: "Playwrite GB" }, groups, 10);
+  assertEquals(off.favourites.map((f) => f.id), ["briem-print", "upright"]);
+  assertEquals(off.removedVariants?.map((f) => f.id), ["gb-s", "gb-j"]);
+  const on = toggle(off, { kind: "builtin", group: "Playwrite GB" }, groups, 20);
+  assertEquals(on.favourites.map((f) => f.id), ["briem-print", "upright", "gb-s", "gb-j"]);
+  assertEquals(on.removedVariants, undefined);
+  // Survives storage.
+  const back = parseRecord(JSON.stringify(off))!;
+  assertEquals(back.removedVariants?.length, 2);
+  // Nothing remembered: the first font of the family.
+  const none = toggle(defaultRecord(groups), { kind: "builtin", group: "Briem Hand" }, groups, 1);
+  const first = toggle(none, { kind: "builtin", group: "Briem Hand" }, groups, 2);
+  assertEquals(first.favourites.map((f) => f.id)[3], "briem-print");
+  // Garbage in removedVariants is dropped, bad entries filtered.
+  assertEquals(
+    parseRecord(JSON.stringify({ ...variants(), removedVariants: "x" }))!.removedVariants,
+    undefined,
+  );
+  assertEquals(
+    parseRecord(
+      JSON.stringify({ ...variants(), removedVariants: [{ id: 1 }, variants().favourites[1]] }),
+    )!
+      .removedVariants?.length,
+    1,
+  );
+});
+
+Deno.test("move carries all of a family's variant entries together", () => {
+  const down = move(variants(), "builtin:Briem Hand", 1, groups, 10);
+  assertEquals(down.favourites.map((f) => f.id), ["gb-s", "gb-j", "briem-print", "upright"]);
+  const up = move(variants(), "builtin:Playwrite US", -1, groups, 10);
+  assertEquals(up.favourites.map((f) => f.id), ["briem-print", "upright", "gb-s", "gb-j"]);
+  const gbDown = move(variants(), "builtin:Playwrite GB", 1, groups, 10);
+  assertEquals(gbDown.favourites.map((f) => f.id), ["briem-print", "upright", "gb-s", "gb-j"]);
+  assertEquals(names(gbDown), [
+    "builtin:Briem Hand",
+    "builtin:Playwrite US",
+    "builtin:Playwrite GB",
+  ]);
+  assertEquals(move(variants(), "builtin:Briem Hand", -1, groups, 10), variants());
+});
+
+Deno.test("ids are capped at 80 UTF-8 bytes, so the longest Google family fits", () => {
+  const family = "A".repeat(64);
+  const long = { id: `google:${family}`, kind: "google", family };
+  const tooLong = { id: "x".repeat(81), kind: "builtin", family: "Briem Hand" };
+  const wide = { id: "é".repeat(41), kind: "builtin", family: "Briem Hand" }; // 82 bytes, 41 units
+  const rec = parseRecord(JSON.stringify({ ts: 1, favourites: [long, tooLong, wide] }))!;
+  assertEquals(rec.favourites.map((f) => f.id), [long.id]);
+  const on = toggle(defaultRecord(groups), { kind: "google", family }, groups, 1);
+  assertEquals(on.favourites.at(-1)?.id, long.id);
+  assertEquals(toggle(on, { kind: "google", family: "A".repeat(65) }, groups, 2), on);
+});

@@ -672,3 +672,47 @@ Deno.test("prefs records are kept by greater ts: pushed as stored, newer pulled 
   assertEquals(await sync(store, srv.f), { status: "ok", changed: false });
   assertEquals(store.prefs, rec(200, "Pacifico"));
 });
+
+Deno.test("a strokes or prefs edit made while a sync is in flight is pushed by the next round", async () => {
+  const store = syncedStore();
+  const srec = (ts: number): StrokesRecord => ({
+    id: "strokes-italic",
+    ts,
+    v: 1,
+    model: "italic",
+    glyphs: { a: { ts } },
+  });
+  const prec = (ts: number, f: string): FavouritesRecord => ({
+    id: prefsId,
+    ts,
+    v: 1,
+    favourites: [{ id: `google:${f}`, kind: "google", family: f }],
+  });
+  store.strokes.set("strokes-italic", srec(100));
+  store.prefs = prec(100, "Caveat");
+  store.state!.pendingAdds.push({ kind: "strokes", id: "strokes-italic" }, {
+    kind: "prefs",
+    id: prefsId,
+  });
+  const srv = fakeServer(
+    (c) => {
+      assertEquals(c.push.strokes, [srec(100)]);
+      // The edit queues the same entry, which the queue already holds (deduped).
+      store.strokes.set("strokes-italic", srec(200));
+      store.prefs = prec(200, "Pacifico");
+      queueAdds(store.state!, [{ kind: "strokes", id: "strokes-italic" }, {
+        kind: "prefs",
+        id: prefsId,
+      }]);
+      return json(answer({ cursor: 1 }));
+    },
+    (c) => {
+      assertEquals(c.push.strokes, [srec(200)]);
+      assertEquals(c.push.prefs, [prec(200, "Pacifico")]);
+      return json(answer({ cursor: 2 }));
+    },
+  );
+  assertEquals((await sync(store, srv.f)).status, "ok");
+  assertEquals(srv.calls.length, 2);
+  assertEquals(store.state!.pendingAdds, []);
+});

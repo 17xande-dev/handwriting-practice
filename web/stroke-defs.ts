@@ -5,7 +5,7 @@
 //
 // A font's file travels as records `{id: "strokes-<fontId>", ts, v: 1, model, glyphs}`, each at most
 // 64 KB. When the glyphs do not fit they are split by glyph range, sorted by character, into
-// `strokes-<fontId>` (part 0) and `strokes-<fontId>-<n>` (n >= 1); every part of one version carries
+// `strokes-<fontId>` (part 0) and `strokes-<fontId>~<n>` (n >= 1); every part of one version carries
 // the same `ts`. A part no longer needed is sent with no glyphs, never deleted (a tombstone is
 // permanent). A greater `ts` than the font's replaces its glyphs, an equal `ts` adds a part's glyphs,
 // an older one is ignored (last writer wins). Unknown top-level fields of a record, and unknown
@@ -25,15 +25,15 @@ export interface StrokesRec {
   [field: string]: unknown;
 }
 
-/** `strokes-<fontId>` for part 0, `strokes-<fontId>-<n>` after. */
+/** `strokes-<fontId>` for part 0, `strokes-<fontId>~<n>` after (`~` never occurs in a font id, so ids cannot collide). */
 export function strokesRecordID(font: string, part: number): string {
-  return part === 0 ? `strokes-${font}` : `strokes-${font}-${part}`;
+  return part === 0 ? `strokes-${font}` : `strokes-${font}~${part}`;
 }
 
 /** The part number of a record id for a known font, null if the id is not one of its parts. */
 export function strokesPart(id: string, font: string): number | null {
   if (id === strokesRecordID(font, 0)) return 0;
-  const prefix = `strokes-${font}-`;
+  const prefix = `strokes-${font}~`;
   if (!id.startsWith(prefix)) return null;
   const rest = id.slice(prefix.length);
   if (!/^[0-9]+$/.test(rest)) return null;

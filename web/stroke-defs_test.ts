@@ -33,12 +33,16 @@ const glyph = (n = 1, verified = true): StrokeGlyph => ({
 
 Deno.test("record ids and parts", () => {
   assertEquals(strokesRecordID("italic", 0), "strokes-italic");
-  assertEquals(strokesRecordID("italic", 2), "strokes-italic-2");
+  assertEquals(strokesRecordID("italic", 2), "strokes-italic~2");
   assertEquals(strokesPart("strokes-italic", "italic"), 0);
-  assertEquals(strokesPart("strokes-italic-3", "italic"), 3);
-  assertEquals(strokesPart("strokes-italic-x", "italic"), null);
-  assertEquals(strokesPart("strokes-italic-0", "italic"), null);
-  assertEquals(strokesPart("strokes-gb-s-1", "gb-s"), 1);
+  assertEquals(strokesPart("strokes-italic~3", "italic"), 3);
+  assertEquals(strokesPart("strokes-italic~x", "italic"), null);
+  assertEquals(strokesPart("strokes-italic~0", "italic"), null);
+  assertEquals(strokesPart("strokes-gb-s~1", "gb-s"), 1);
+  // Part 1 of `custom-a` used to be `strokes-custom-a-1`, the id of font `custom-a-1`'s part 0.
+  assertEquals(strokesRecordID("custom-a", 1) === strokesRecordID("custom-a-1", 0), false);
+  assertEquals(strokesPart("strokes-custom-a-1", "custom-a"), null);
+  assertEquals(strokesPart("strokes-custom-a-1", "custom-a-1"), 0);
   // A part of one font is a font of its own for another: the record's `model` says which.
   assertEquals(strokesPart("strokes-gb-s", "gb"), null);
 });
@@ -131,8 +135,8 @@ Deno.test("merging pulled parts: greater ts replaces, equal adds, older is ignor
   const g = (n: number) => encodeGlyph(glyph(n));
   const all = [
     rec("strokes-f", 10, { a: g(1) }),
-    rec("strokes-f-1", 10, { b: g(1) }),
-    rec("strokes-f-2", 5, { z: g(1) }), // an older version's part
+    rec("strokes-f~1", 10, { b: g(1) }),
+    rec("strokes-f~2", 5, { z: g(1) }), // an older version's part
   ];
   const d = assemble(all, "f")!;
   assertEquals(Object.keys(d.glyphs).sort(), ["a", "b"]);

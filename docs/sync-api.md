@@ -38,7 +38,10 @@ except its size and that no two of its top-level member names are equal when com
 
 - **`ts` is `at`.** For a check, `ts` equals the record's `at`, the time the line was checked
   (milliseconds since the epoch), which must be greater than 0 (the server refuses a non-positive
-  `ts`, so a client must not make or accept a check whose `at` is not). It is never the time of the add
+  `ts`, so a client must not make or accept a check whose `at` is not). The same goes for a `ts` that
+  is not finite. For the mutable kinds (`strokes`, `prefs`) the server also refuses a `ts` more than one
+  day ahead of its own clock (reason `"ts in the future"`), because a far-future `ts` would pin the
+  record: no later honest edit could replace it. It is never the time of the add
   or the upload. An `ink` record's
   `ts` is the `at` of the check it belongs to.
 - **A record with an `id` keeps it.** Whenever it is loaded, imported or uploaded.
@@ -145,9 +148,12 @@ A person's own stroke definitions (order and direction of each letter's pen stro
 written on the iPad's "Stroke models" screen (iPad repo `docs/strokes.md`, "Sync"; the web's /strokes page
 writes them in the same shape and the worksheets judge by them). One record per font: `id` is `"strokes-<fontId>"`
 (the catalogue font id, or `custom-<family>` for a custom font), `ts` is the time of the last edit. It
-must stay within 64 KB, so a font with many definitions is split by glyph range into
-`"strokes-<fontId>-<n>"` (n from 0), each part holding the glyphs of a contiguous range of characters
-and carrying the same `ts`:
+must stay within 64 KB, so a font with many definitions is split by glyph range into parts, each
+holding the glyphs of a contiguous range of characters and carrying the same `ts`. Part 0 is
+`"strokes-<fontId>"`; later parts are `"strokes-<fontId>~<n>"` (n from 1). The `~` cannot occur in a
+font id (it is not in the catalogue ids, nor in a Google family name), so the id of a part of one font
+never equals the id of another font's part 0 (with `-` it did: part 1 of `custom-a` against part 0 of
+a font `custom-a-1`). The server accepts any id of 1-64 bytes, `~` included:
 
 ```json
 {"id":"strokes-italic","ts":1760000000000,"v":1,"model":"italic",
@@ -175,9 +181,16 @@ time of the last edit in ms (so the last writer wins), `v` is 1.
                {"id":"google:My Font","kind":"custom","family":"My Font"}]}
 ```
 
-- **Order** is the array order.
+- **Order** is the array order. A builtin family with several variants has one member per variant;
+  they move and are removed together.
+- **`id` is at most 80 bytes of UTF-8** (`google:` plus a 64-character family is 71); a member over
+  that is dropped on read by both clients.
+- **`removedVariants`** (optional, array of members shaped like `favourites`): the members an un-star
+  took out, so starring the family again restores all its variants (with none remembered, a client adds
+  the family's first font). Clients that do not know it keep it, in place, like any unknown member of the record.
 - Each member has `id`, `kind` (`"builtin"`, `"google"` or `"custom"`), `family` (the family name) and
-  optionally `variant` (a variant id; omitted means the whole family). For a `builtin`, `id` is the
+  optionally `variant` (a variant id; omitted means the whole family). For a `builtin`, `family` is
+  the catalogue group (tile) name and `id` is the
   FontCatalog font id (`"italic"`, `"briem-print"`, ...); a client that lists families rather than fonts
   (the web's family tiles) writes the id of the family's first font and treats any id of the family as
   that family. For `google` (a family in the curated handwriting list) and `custom` (any other

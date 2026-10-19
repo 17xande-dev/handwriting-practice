@@ -10,7 +10,14 @@
 // Kinds are handled generically: "check", "ink", "strokes" and "prefs" take exactly the same
 // path, so whoever starts writing ink records needs only to store them.
 
-import { entryKey, type Kind, KINDS, type SyncEntry, type SyncStore } from "./progress-store.ts";
+import {
+  entryKey,
+  type Kind,
+  KINDS,
+  queueAdds,
+  type SyncEntry,
+  type SyncStore,
+} from "./progress-store.ts";
 
 /** Records sent per request (the server refuses more than 1000, deletions likewise). */
 export const BATCH = 500;
@@ -126,6 +133,9 @@ async function round(store: SyncStore, f: FetchFn, cap: Cap): Promise<Round> {
   const batch: SyncEntry[] = [];
   const push: Record<Kind, unknown[]> = { check: [], ink: [], strokes: [], prefs: [] };
   let bytes = 0, count = 0;
+  // The ts of each mutable record (strokes, prefs) as sent: an edit made while the request is out
+  // keeps the same queue entry, so only a changed ts tells that the new version still has to go.
+  const sentTs = new Map<string, number>();
   for (const e of candidates) {
     const rec = locals[e.kind].get(e.id);
     if (rec) {
@@ -134,6 +144,10 @@ async function round(store: SyncStore, f: FetchFn, cap: Cap): Promise<Round> {
       bytes += size;
       count++;
       push[e.kind].push(rec);
+      const ts = (rec as { ts?: unknown }).ts;
+      if ((e.kind === "strokes" || e.kind === "prefs") && typeof ts === "number") {
+        sentTs.set(entryKey(e), ts);
+      }
     }
     batch.push(e);
   }
@@ -199,6 +213,21 @@ async function round(store: SyncStore, f: FetchFn, cap: Cap): Promise<Round> {
     s.pendingDeletes = s.pendingDeletes.filter((e) => !sentDeletes.has(entryKey(e)));
     removed = before - s.pendingAdds.length - s.pendingDeletes.length;
   });
+
+  // A strokes or prefs record edited while the request was out is still queued by the edit itself,
+  // but the removal above may have taken that entry: look again (after the removal, so an edit
+  // landing from here on queues itself) and queue what changed.
+  for (const kind of ["strokes", "prefs"] as const) {
+    const entries = [...sentTs.keys()].filter((k) => k.startsWith(`${kind}:`));
+    if (!entries.length) continue;
+    const now = await store.localRecords(kind, entries.map((k) => k.slice(kind.length + 1)));
+    const again: SyncEntry[] = [];
+    for (const [id, rec] of now) {
+      const was = sentTs.get(entryKey({ kind, id }));
+      if (was !== undefined && (rec as { ts?: unknown }).ts !== was) again.push({ kind, id });
+    }
+    if (again.length) await store.updateSync((s) => queueAdds(s, again));
+  }
 
   // Merge what came back. A record deleted here since the request went out is
   // not welcomed back; its deletion is still queued and will reach the server.

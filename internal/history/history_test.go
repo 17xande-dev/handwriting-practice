@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"calligraphy/internal/dbtest"
 )
@@ -338,6 +339,34 @@ func TestPrefsRecordsReplaceByTS(t *testing.T) {
 		t.Fatalf("a tombstoned prefs record came back: %+v", all)
 	}
 	if id, err := CheckRecord("prefs", json.RawMessage(`{"id":"prefs-favourites","ts":5}`)); err != nil || id != "prefs-favourites" {
+		t.Fatalf("%q %v", id, err)
+	}
+}
+
+func TestCheckRecordRefusesFarFutureTSForMutableKinds(t *testing.T) {
+	soon := time.Now().Add(time.Hour).UnixMilli()
+	far := time.Now().Add(48 * time.Hour).UnixMilli()
+	for _, kind := range []string{"strokes", "prefs"} {
+		if _, err := CheckRecord(kind, json.RawMessage(fmt.Sprintf(`{"id":"x","ts":%d}`, soon))); err != nil {
+			t.Fatalf("%s an hour ahead: %v", kind, err)
+		}
+		id, err := CheckRecord(kind, json.RawMessage(fmt.Sprintf(`{"id":"x","ts":%d}`, far)))
+		if err == nil || id != "x" || !strings.Contains(err.Error(), "ts in the future") {
+			t.Fatalf("%s two days ahead: %q %v", kind, id, err)
+		}
+	}
+	// Immutable kinds are never replaced by ts, so a future ts does no harm there.
+	if _, err := CheckRecord("ink", json.RawMessage(fmt.Sprintf(`{"id":"x","ts":%d}`, far))); err != nil {
+		t.Fatal(err)
+	}
+	// Not finite: 1e999 overflows float64 and is not a usable number.
+	for _, ts := range []string{`1e999`, `"NaN"`, `-1`, `0`} {
+		if _, err := CheckRecord("strokes", json.RawMessage(`{"id":"x","ts":`+ts+`}`)); err == nil {
+			t.Fatalf("ts %s accepted", ts)
+		}
+	}
+	// A `~` in an id (later parts of a split strokes file) is fine.
+	if id, err := CheckRecord("strokes", json.RawMessage(`{"id":"strokes-custom-a~1","ts":5}`)); err != nil || id != "strokes-custom-a~1" {
 		t.Fatalf("%q %v", id, err)
 	}
 }

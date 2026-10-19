@@ -203,7 +203,9 @@ function main() {
       {
         saved: async (glyph) => {
           const edits = { [char]: glyph && glyph.strokes.length ? glyph : null };
-          await store.saveStrokesRecords(applyEdits(defs, fontId(e), edits));
+          // Definitions as stored now: a sync may have brought newer ones since this page loaded.
+          await models.refresh();
+          await store.saveStrokesRecords(applyEdits(models.defs(fontId(e)), fontId(e), edits));
           await reload();
           void syncer.now();
         },
@@ -252,6 +254,7 @@ function main() {
       return;
     }
     const edits: Record<string, StrokeGlyph> = r.glyphs;
+    await models.refresh();
     await store.saveStrokesRecords(
       applyEdits(models.defs(fontId(current)), fontId(current), edits),
     );
