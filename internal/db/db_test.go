@@ -1,6 +1,7 @@
 package db_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,5 +83,76 @@ func TestStrictRefusesWrongType(t *testing.T) {
 	                  VALUES ('a@b.c', 'h', 'yes', '')`)
 	if err == nil {
 		t.Fatal("STRICT accepted a string in an INTEGER column")
+	}
+}
+
+// The strokes migration rebuilds records: every row and seq survives, the seq counter does not go
+// back, the CHECK now allows 'strokes' (and still nothing else), and the table is STRICT.
+func TestStrokesMigrationKeepsRecords(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	// The schema as it was at version 1.
+	v1, err := os.ReadFile("migrations/0001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(string(v1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO users (email, password_hash, created_at) VALUES ('a@x.com', 'h', '')`,
+		`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'check', 'c1', '{"id":"c1","ts":1}')`,
+		`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'ink', 'i1', '{"id":"i1","ts":1}')`,
+		`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'ink', 'i2', NULL)`,
+		// A deleted top seq: the counter is ahead of every row.
+		`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'ink', 'gone', '{}')`,
+		`DELETE FROM records WHERE id = 'gone'`,
+	} {
+		if _, err := d.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if _, err := d.Exec(`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'strokes', 's', '{}')`); err == nil {
+		t.Fatal("version 1 accepted a strokes record")
+	}
+	applied, err := db.Migrate(d)
+	if err != nil || len(applied) != 1 {
+		t.Fatalf("applied %v, %v", applied, err)
+	}
+	var n int
+	d.QueryRow(`SELECT count(*) FROM records`).Scan(&n)
+	if n != 3 {
+		t.Fatalf("%d rows after migration, want 3", n)
+	}
+	var seq int
+	d.QueryRow(`SELECT seq FROM records WHERE id = 'i2'`).Scan(&seq)
+	if seq != 3 {
+		t.Errorf("seq of i2 is %d, want 3", seq)
+	}
+	if _, err := d.Exec(`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'strokes', 's', '{}')`); err != nil {
+		t.Fatalf("strokes refused after migration: %v", err)
+	}
+	d.QueryRow(`SELECT seq FROM records WHERE id = 's'`).Scan(&seq)
+	if seq != 5 {
+		t.Errorf("new seq %d, want 5 (the counter must not go back to 4)", seq)
+	}
+	if _, err := d.Exec(`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'sketch', 's', '{}')`); err == nil {
+		t.Fatal("an unknown kind was accepted")
+	}
+	var idx int
+	d.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'records_user_seq'`).Scan(&idx)
+	if idx != 1 {
+		t.Error("records_user_seq index missing")
+	}
+	var left int
+	d.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'records_old'`).Scan(&left)
+	if left != 0 {
+		t.Error("records_old left behind")
 	}
 }

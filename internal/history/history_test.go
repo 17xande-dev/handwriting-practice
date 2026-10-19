@@ -274,3 +274,40 @@ func TestPullCapsPagesByBytes(t *testing.T) {
 		t.Errorf("tiny cap: %d records, %v", len(got), err)
 	}
 }
+
+func strokesRec(id string, ts int) Record {
+	return Record{Kind: "strokes", ID: id, Data: json.RawMessage(fmt.Sprintf(`{"id":%q,"ts":%d}`, id, ts))}
+}
+
+// A strokes record is replaced by a greater ts (taking a new seq so other devices pull it), never by an
+// equal or older one; the other kinds stay immutable.
+func TestStrokesRecordsReplaceByTS(t *testing.T) {
+	s, a, _ := setup(t)
+	s.Push(ctx, a, []Record{strokesRec("strokes-x", 10)}, nil)
+	_, c1 := pullAll(t, s, a, 0)
+	s.Push(ctx, a, []Record{strokesRec("strokes-x", 10), strokesRec("strokes-x", 5)}, nil)
+	if recs, c := pullAll(t, s, a, c1); len(recs) != 0 || c != c1 {
+		t.Fatalf("equal or older ts changed the record: %d", len(recs))
+	}
+	s.Push(ctx, a, []Record{strokesRec("strokes-x", 20)}, nil)
+	recs, _ := pullAll(t, s, a, c1)
+	if len(recs) != 1 || recordTS(recs[0].Data) != 20 {
+		t.Fatalf("newer ts did not replace: %+v", recs)
+	}
+	// An ink record with a newer ts does not replace the stored one.
+	s.Push(ctx, a, []Record{run("ink", "i1")}, nil)
+	_, c2 := pullAll(t, s, a, 0)
+	s.Push(ctx, a, []Record{{Kind: "ink", ID: "i1", Data: json.RawMessage(`{"id":"i1","ts":1900000000000}`)}}, nil)
+	if recs, _ := pullAll(t, s, a, c2); len(recs) != 0 {
+		t.Fatal("an ink record was replaced")
+	}
+}
+
+func TestCheckRecordAcceptsStrokes(t *testing.T) {
+	if id, err := CheckRecord("strokes", json.RawMessage(`{"id":"strokes-italic","ts":5}`)); err != nil || id != "strokes-italic" {
+		t.Fatalf("%q %v", id, err)
+	}
+	if _, err := CheckRecord("sketch", json.RawMessage(`{"id":"a","ts":5}`)); err == nil {
+		t.Fatal("unknown kind accepted")
+	}
+}

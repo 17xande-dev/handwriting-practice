@@ -115,8 +115,30 @@ export interface InkRecord {
   [field: string]: unknown;
 }
 
-export type Kind = "check" | "ink";
-export const KINDS: Kind[] = ["check", "ink"];
+/**
+ * A person's stroke definitions for one font (iPad docs/strokes.md, "Sync"): `strokes-<fontId>`, or
+ * `strokes-<fontId>-<n>` when split. Kept and synced as it came (no UI yet); unlike the other kinds
+ * it is edited in place, so the greater `ts` wins (`newerRecords`).
+ */
+export interface StrokesRecord {
+  id: string;
+  ts: number;
+  [field: string]: unknown;
+}
+
+export type Kind = "check" | "ink" | "strokes";
+export const KINDS: Kind[] = ["check", "ink", "strokes"];
+
+/** The records that are new or have a greater ts than the one held under the same id. */
+export function newerRecords(have: Map<string, number>, records: unknown[]): StrokesRecord[] {
+  const out = new Map<string, StrokesRecord>();
+  for (const r of records) {
+    if (!hasIdentity(r)) continue;
+    const held = Math.max(have.get(r.id) ?? -Infinity, out.get(r.id)?.ts ?? -Infinity);
+    if (r.ts > held) out.set(r.id, r as StrokesRecord);
+  }
+  return [...out.values()];
+}
 
 /** A record named without its data: a queued add, or a deletion. */
 export interface SyncEntry {
@@ -390,7 +412,9 @@ const dbName = "italic-practice";
 // Version 2 adds the id index on checks, the ink and meta stores, and gives
 // every existing check its identity. Version 3 adds the store of what is
 // written on each sheet row. Version 4 indexes the ink records by ts, so the oldest can be pruned.
-const dbVersion = 4;
+// Version 5 adds the store of synced stroke definitions.
+const dbVersion = 5;
+const strokes = "strokes";
 const checks = "checks";
 const ink = "ink";
 const meta = "meta";
@@ -436,6 +460,7 @@ function open(): Promise<IDBDatabase> {
       }
       if (ev.oldVersion < 3) db.createObjectStore(writing);
       if (ev.oldVersion < 4) tx.objectStore(ink).createIndex("ts", "ts");
+      if (ev.oldVersion < 5) db.createObjectStore(strokes, { keyPath: "id" });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -623,9 +648,10 @@ export class DeviceStore implements ProgressStore, SyncStore {
 
   /** Every local record, as entries: the "add this browser's checks" offer. */
   async allEntries(): Promise<SyncEntry[]> {
-    const tx = (await this.#open()).transaction([checks, ink], "readonly");
+    const tx = (await this.#open()).transaction([checks, ink, strokes], "readonly");
     const c = tx.objectStore(checks).getAll();
     const i = tx.objectStore(ink).getAllKeys();
+    const st = tx.objectStore(strokes).getAllKeys();
     await done(tx);
     return [
       ...(c.result as CheckRecord[]).filter((r) => typeof r.id === "string").map((r) => ({
@@ -633,6 +659,7 @@ export class DeviceStore implements ProgressStore, SyncStore {
         id: r.id,
       })),
       ...i.result.map((id) => ({ kind: "ink" as const, id: String(id) })),
+      ...st.result.map((id) => ({ kind: "strokes" as const, id: String(id) })),
     ];
   }
 
@@ -644,6 +671,13 @@ export class DeviceStore implements ProgressStore, SyncStore {
   async localRecords(kind: Kind, ids: string[]): Promise<Map<string, unknown>> {
     const out = new Map<string, unknown>();
     if (!ids.length) return out;
+    if (kind === "strokes") {
+      const tx = (await this.#open()).transaction(strokes, "readonly");
+      const reqs = ids.map((id) => tx.objectStore(strokes).get(id));
+      await done(tx);
+      for (const q of reqs) if (q.result) out.set((q.result as StrokesRecord).id, q.result);
+      return out;
+    }
     if (kind === "ink") {
       const tx = (await this.#open()).transaction(ink, "readonly");
       const reqs = ids.map((id) => tx.objectStore(ink).get(id));
@@ -657,6 +691,21 @@ export class DeviceStore implements ProgressStore, SyncStore {
   }
 
   async mergeRecords(kind: Kind, records: unknown[]): Promise<number> {
+    if (kind === "strokes") {
+      // Read and write in one transaction, so a concurrent edit is never overwritten by an older record.
+      const tx = (await this.#open()).transaction(strokes, "readwrite");
+      let n = 0;
+      tx.objectStore(strokes).getAll().onsuccess = (e) => {
+        const have = new Map(
+          (e.target as IDBRequest<StrokesRecord[]>).result.map((r) => [r.id, r.ts]),
+        );
+        const fresh = newerRecords(have, records);
+        n = fresh.length;
+        for (const r of fresh) tx.objectStore(strokes).put(r);
+      };
+      await done(tx);
+      return n;
+    }
     if (kind === "check") {
       const { fresh } = planMerge(await this.all(), records);
       if (!fresh.length) return 0;
@@ -678,9 +727,10 @@ export class DeviceStore implements ProgressStore, SyncStore {
   async removeIds(kind: Kind, ids: string[]): Promise<string[]> {
     if (!ids.length) return [];
     const gone: string[] = [];
-    if (kind === "ink") {
-      const tx = (await this.#open()).transaction(ink, "readwrite");
-      const s = tx.objectStore(ink);
+    if (kind === "ink" || kind === "strokes") {
+      const store = kind === "ink" ? ink : strokes;
+      const tx = (await this.#open()).transaction(store, "readwrite");
+      const s = tx.objectStore(store);
       for (const id of ids) {
         s.getKey(id).onsuccess = (e) => {
           if ((e.target as IDBRequest).result !== undefined) {

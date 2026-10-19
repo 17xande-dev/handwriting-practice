@@ -9,10 +9,12 @@ import {
   type InkRecord,
   type Kind,
   type NewCheck,
+  newerRecords,
   newId,
   planMerge,
   queueAdds,
   queueDeletes,
+  type StrokesRecord,
   type SyncEntry,
   type SyncState,
   type SyncStore,
@@ -27,6 +29,7 @@ import { ago, BATCH, checkSignedIn, type FetchFn, MAX_BODY_BYTES, sync } from ".
 class MemStore implements SyncStore {
   checks: CheckRecord[] = [];
   ink = new Map<string, InkRecord>();
+  strokes = new Map<string, StrokesRecord>();
   state: SyncState | null = null;
   generation = 0;
 
@@ -50,7 +53,11 @@ class MemStore implements SyncStore {
   localRecords(kind: Kind, ids: string[]) {
     const out = new Map<string, unknown>();
     for (const id of ids) {
-      const r = kind === "ink" ? this.ink.get(id) : this.checks.find((c) => c.id === id);
+      const r = kind === "ink"
+        ? this.ink.get(id)
+        : kind === "strokes"
+        ? this.strokes.get(id)
+        : this.checks.find((c) => c.id === id);
       if (r) out.set(id, r);
     }
     return Promise.resolve(out);
@@ -59,6 +66,11 @@ class MemStore implements SyncStore {
     if (kind === "check") {
       const { fresh } = planMerge(this.checks, records);
       this.checks.push(...fresh);
+      return Promise.resolve(fresh.length);
+    }
+    if (kind === "strokes") {
+      const fresh = newerRecords(new Map([...this.strokes].map(([k, v]) => [k, v.ts])), records);
+      for (const r of fresh) this.strokes.set(r.id, r);
       return Promise.resolve(fresh.length);
     }
     const fresh = records.filter(hasIdentity).filter((r) => !this.ink.has(r.id));
@@ -70,6 +82,8 @@ class MemStore implements SyncStore {
     for (const id of ids) {
       if (kind === "ink") {
         if (this.ink.delete(id)) gone.push(id);
+      } else if (kind === "strokes") {
+        if (this.strokes.delete(id)) gone.push(id);
       } else {
         const i = this.checks.findIndex((c) => c.id === id);
         if (i >= 0) {
@@ -204,7 +218,7 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const answer = (over: Record<string, unknown> = {}) => ({
   cursor: 1,
-  records: { check: [], ink: [] },
+  records: { check: [], ink: [], strokes: [] },
   deleted: [],
   more: false,
   rejected: [],
@@ -237,7 +251,7 @@ Deno.test("sync pages while more is true, then merges both kinds", async () => {
     () => json(answer({ cursor: 2, more: true, records: { check: [rec(20)] } })),
     (c) => {
       assertEquals(c.cursor, 2);
-      assertEquals(c.push, { check: [], ink: [] });
+      assertEquals(c.push, { check: [], ink: [], strokes: [] });
       return json(answer({ cursor: 3, records: { check: [rec(10)], ink: [inkOf("c10", "k1")] } }));
     },
   );
@@ -580,4 +594,34 @@ Deno.test("a round that neither shrinks the queue nor pulls anything stops with 
   const r = await sync(store, f);
   assertEquals(r.status, "error");
   assertEquals(calls, 1);
+});
+
+Deno.test("strokes records are stored as they come, and the greater ts wins", async () => {
+  const store = syncedStore();
+  const rec = (ts: number, note: string): StrokesRecord => ({
+    id: "strokes-italic",
+    ts,
+    v: 1,
+    model: "italic",
+    glyphs: { a: { note } },
+  });
+  store.strokes.set("strokes-italic", rec(100, "mine"));
+  store.state!.pendingAdds.push({ kind: "strokes", id: "strokes-italic" });
+  const srv = fakeServer(
+    (c) => {
+      assertEquals(c.push.strokes, [rec(100, "mine")]);
+      return json(answer({ cursor: 1, records: { strokes: [rec(100, "mine")] } }));
+    },
+    () => json(answer({ cursor: 2, records: { strokes: [rec(90, "old"), rec(200, "newer")] } })),
+  );
+  assertEquals(await sync(store, srv.f), { status: "ok", changed: false });
+  assertEquals(await sync(store, srv.f), { status: "ok", changed: true });
+  assertEquals(store.strokes.get("strokes-italic"), rec(200, "newer"));
+  // Unknown fields survive untouched.
+  assertEquals(newerRecords(new Map(), [{ id: "x", ts: 1, extra: [1, 2] }]), [{
+    id: "x",
+    ts: 1,
+    extra: [1, 2],
+  }]);
+  assertEquals(newerRecords(new Map([["x", 5]]), [{ id: "x", ts: 5 }, { id: "y" }, 3]), []);
 });

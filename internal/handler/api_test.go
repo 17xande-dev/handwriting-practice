@@ -108,7 +108,7 @@ func TestSyncEmptyResponseShape(t *testing.T) {
 	s.addUser(t, "a@x.com", false)
 	token := s.deviceToken(t, "a@x.com", testPassword)
 	rec := s.api(t, "POST", "/api/sync", `{"cursor":0}`, token, "")
-	want := `{"cursor":0,"records":{"check":[],"ink":[]},"deleted":[],"more":false,"rejected":[]}`
+	want := `{"cursor":0,"records":{"check":[],"ink":[],"strokes":[]},"deleted":[],"more":false,"rejected":[]}`
 	if got := strings.TrimSpace(rec.Body.String()); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
@@ -428,5 +428,39 @@ func TestSyncPullPagesByBytes(t *testing.T) {
 	}
 	if total != 100 {
 		t.Errorf("paged through %d of 100 records", total)
+	}
+}
+
+// A strokes record is a person's definitions for one font, edited in place: a newer ts replaces the
+// stored one and reaches the other devices, an older one is ignored, and a deletion still wins.
+func TestSyncStrokesRecords(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "a@x.com", false)
+	token := s.deviceToken(t, "a@x.com", testPassword)
+	rec := func(ts int, note string) string {
+		return fmt.Sprintf(`{"id":"strokes-italic","ts":%d,"v":1,"model":"italic","glyphs":{"a":{"note":%q}}}`, ts, note)
+	}
+	first := s.sync(t, `{"cursor":0,"push":{"strokes":[`+rec(100, "one")+`]}}`, token, "")
+	if len(first.Records["strokes"]) != 1 || len(first.Rejected) != 0 {
+		t.Fatalf("strokes: %d records, rejected %+v", len(first.Records["strokes"]), first.Rejected)
+	}
+	// Another device pushes a newer edit, then a stale one.
+	second := s.sync(t, fmt.Sprintf(`{"cursor":%d,"push":{"strokes":[%s]}}`, first.Cursor, rec(200, "two")), token, "")
+	if len(second.Records["strokes"]) != 1 || string(second.Records["strokes"][0]) != rec(200, "two") {
+		t.Fatalf("newer edit not returned: %s", second.Records["strokes"])
+	}
+	third := s.sync(t, fmt.Sprintf(`{"cursor":%d,"push":{"strokes":[%s]}}`, second.Cursor, rec(150, "stale")), token, "")
+	if len(third.Records["strokes"]) != 0 {
+		t.Fatalf("a stale edit replaced the record: %s", third.Records["strokes"])
+	}
+	all := s.sync(t, `{"cursor":0}`, token, "")
+	if len(all.Records["strokes"]) != 1 || string(all.Records["strokes"][0]) != rec(200, "two") {
+		t.Fatalf("stored record: %s", all.Records["strokes"])
+	}
+	// Deleted, it stays deleted.
+	s.sync(t, `{"cursor":0,"deleted":[{"kind":"strokes","id":"strokes-italic"}]}`, token, "")
+	back := s.sync(t, `{"cursor":0,"push":{"strokes":[`+rec(300, "three")+`]}}`, token, "")
+	if len(back.Records["strokes"]) != 0 {
+		t.Fatal("a deleted strokes record came back")
 	}
 }

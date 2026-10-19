@@ -2,9 +2,10 @@
 //
 // The apps are local-first: each keeps its own history and treats the
 // server as a place to swap records with the user's other devices. A record
-// is one checked line ("check") or the ink of one checked attempt ("ink"),
-// stored as the client's own JSON and never edited, so syncing is a union by
-// (kind, id). A deletion is a tombstone: the row stays with data NULL, so
+// is one checked line ("check"), the ink of one checked attempt ("ink") or a
+// person's stroke definitions for one font ("strokes"), stored as the client's
+// own JSON. Checks and ink are never edited, so syncing is a union by
+// (kind, id); a strokes record is edited by its owner, and the greater ts wins. A deletion is a tombstone: the row stays with data NULL, so
 // every other device learns to delete it too.
 //
 // Every insert and tombstone takes a new seq. A client keeps the highest
@@ -21,13 +22,19 @@ import (
 	"strings"
 )
 
-// Kinds are the two records the apps keep: a checked line, and the
-// quantized strokes of one checked attempt.
-var Kinds = []string{"check", "ink"}
+// Kinds are the records the apps keep: a checked line, the quantized
+// strokes of one checked attempt, and a person's stroke definitions for one
+// font ("strokes").
+var Kinds = []string{"check", "ink", "strokes"}
 
 func validKind(k string) bool {
-	return k == "check" || k == "ink"
+	return k == "check" || k == "ink" || k == "strokes"
 }
+
+// replaceable kinds are edited in place by their owner: a pushed record with
+// the same id and a greater ts replaces the stored one (and takes a new seq,
+// so every device pulls it). The others are immutable.
+func replaceable(kind string) bool { return kind == "strokes" }
 
 // MaxRecordBytes bounds one record's JSON. A check is a few KB; the ink of a
 // long line, quantized, is the largest.
@@ -151,6 +158,11 @@ func (s *Store) Push(ctx context.Context, userID int64, records []Record, delete
 	}
 	defer insert.Close()
 	for _, r := range records {
+		if replaceable(r.Kind) {
+			if err := replaceIfNewer(ctx, tx, userID, r); err != nil {
+				return err
+			}
+		}
 		if _, err := insert.ExecContext(ctx, userID, r.Kind, r.ID, string(r.Data)); err != nil {
 			return err
 		}
@@ -184,6 +196,36 @@ func (s *Store) Push(ctx context.Context, userID int64, records []Record, delete
 		}
 	}
 	return tx.Commit()
+}
+
+// replaceIfNewer removes the live stored record with r's id when r's ts is
+// greater, so the insert that follows lands as a new row with a new seq. A
+// tombstone, an equal or older ts, or no record leaves things as they are
+// (the insert is then a no-op or a first insert).
+func replaceIfNewer(ctx context.Context, tx *sql.Tx, userID int64, r Record) error {
+	var have sql.NullString
+	err := tx.QueryRowContext(ctx, `SELECT data FROM records WHERE user_id = ? AND kind = ? AND id = ?`,
+		userID, r.Kind, r.ID).Scan(&have)
+	if err == sql.ErrNoRows || !have.Valid {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if recordTS(json.RawMessage(have.String)) >= recordTS(r.Data) {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM records WHERE user_id = ? AND kind = ? AND id = ? AND data IS NOT NULL`,
+		userID, r.Kind, r.ID)
+	return err
+}
+
+func recordTS(raw json.RawMessage) float64 {
+	var v struct {
+		TS float64 `json:"ts"`
+	}
+	json.Unmarshal(raw, &v)
+	return v.TS
 }
 
 // Pull returns up to limit changes after cursor, oldest first, whose data

@@ -16,10 +16,12 @@ end of this page. It is the same contract as music-practice's, with different re
   | ------- | --------------------------------------------------------- | ---------------------------------- |
   | `check` | one checked line: score, letters, metrics                 | `CheckRecord`                      |
   | `ink`   | the quantized strokes of one checked attempt (see below)  | `InkRecord`                        |
+  | `strokes` | a person's stroke definitions for one font (see below)  | `StrokesRecord`                    |
 
-  The server accepts exactly these two kinds (a database `CHECK` constraint and `history.Kinds`).
-  Anything else lands in `rejected`.
-- **Deletions are tombstones.** Clearing history on one device sends the removed ids (of both kinds).
+  The server accepts exactly these three kinds (a database `CHECK` constraint, migration `0002`, and
+  `history.Kinds`). Anything else lands in `rejected`. `check` and `ink` records are immutable;
+  `strokes` records are not (see its section).
+- **Deletions are tombstones.** Clearing history on one device sends the removed ids (of check and ink; strokes definitions are not history and are not cleared).
   The server keeps a tombstone, so every other device deletes them too, and a device that hasn't
   heard yet can't resurrect them by pushing them again: a tombstoned id stays deleted.
 - **Cursor.** Every stored record and tombstone gets a new, increasing sequence number. A client keeps
@@ -136,6 +138,29 @@ pinned by the golden vectors in `testdata/metrics/ink.json` and `ink-decode.json
 A check record may also carry `metrics2` and `pen2` (same document); readers that do not know them
 ignore them, and a `pen` of any non-empty string is accepted (the iPad adds "pointed" and "pencil").
 
+### `strokes`
+
+A person's own stroke definitions (order and direction of each letter's pen strokes) for one font,
+written on the iPad's "Stroke models" screen (iPad repo `docs/strokes.md`, "Sync"; the web has no UI
+for them yet and keeps and syncs them as they come). One record per font: `id` is `"strokes-<fontId>"`
+(the catalogue font id, or `custom-<family>` for a custom font), `ts` is the time of the last edit. It
+must stay within 64 KB, so a font with many definitions is split by glyph range into
+`"strokes-<fontId>-<n>"` (n from 0), each part holding the glyphs of a contiguous range of characters
+and carrying the same `ts`:
+
+```json
+{"id":"strokes-italic","ts":1760000000000,"v":1,"model":"italic",
+ "glyphs":{"a":{"strokes":[{"pts":[[0.675,-0.875],[0.45,-0.95]],"kind":"main"}],
+                "verified":true,"origin":"user","confidence":1}}}
+```
+
+`glyphs` is the `glyphs` object of a stroke model file. **Unlike the other kinds a strokes record is
+edited in place:** when a pushed `strokes` record has the same id as a live stored one and a **greater
+`ts`**, the server replaces it (the row takes a new seq, so every device pulls the new version); an
+equal or older `ts` is ignored, and a tombstoned id stays deleted. A client merges a pulled strokes
+record the same way: keep the one with the greater `ts`. A client that edits a font and finds more
+parts than it now needs deletes the surplus ids.
+
 ## Authentication
 
 - **Browser:** the `hp_session` cookie set by signing in at `/account`. Same-origin `fetch` sends it.
@@ -206,7 +231,8 @@ always send it):
   "cursor": 0,
   "push": {
     "check": [{ "id": "…", "ts": 1760000000000, "...": "the record's own fields" }],
-    "ink": []
+    "ink": [],
+    "strokes": []
   },
   "deleted": [{ "kind": "check", "id": "…" }]
 }
@@ -217,7 +243,7 @@ Response (always every key, always arrays, never `null`):
 ```json
 {
   "cursor": 42,
-  "records": { "check": [ {…} ], "ink": [] },
+  "records": { "check": [ {…} ], "ink": [], "strokes": [] },
   "deleted": [ { "kind": "check", "id": "…" } ],
   "more": false,
   "rejected": [ { "kind": "ink", "id": "…", "reason": "record over 65536 bytes" } ]
@@ -270,7 +296,7 @@ the Keychain, and the browser's cookie is HttpOnly.
 
 1. **Recording** a check or ink record, while sync is on: append `{kind, id}` to `pendingAdds`.
    Restoring a backup queues every record it added.
-2. **Deleting** (Clear history), while sync is on: work out the ids actually removed, of both kinds,
+2. **Deleting** (Clear history), while sync is on: work out the ids actually removed, of check and ink,
    append them to `pendingDeletes`, and drop them from `pendingAdds`.
 3. **Signing in** on a device that already has history: offer "Add this device's N records to
    <email>?". On yes, queue every local record in `pendingAdds`. The server dedupes, so this is safe to
