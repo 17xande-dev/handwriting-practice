@@ -10,9 +10,8 @@ import (
 // The runtime image is distroless: no shell, no wget, no curl. A container
 // healthcheck therefore cannot shell out to probe the server, so the binary
 // probes itself (`calligraphy -healthcheck`). Anything that waits for a healthy
-// container (compose.prod.yaml starts the Cloudflare tunnel only once the app
-// is healthy) would otherwise find a healthcheck that can never run and never
-// start.
+// container (a compose `depends_on: service_healthy`) would otherwise find a
+// healthcheck that can never run and never start.
 
 // healthcheckURL turns a listen address into the URL to probe. An address
 // with no host (":8080", the default) listens on every interface, so the

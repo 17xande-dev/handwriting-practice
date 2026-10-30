@@ -63,7 +63,7 @@ func TestProbe(t *testing.T) {
 
 // The runtime image has no shell or wget, so a compose healthcheck that
 // shells out can never pass, so the container never turns healthy and whatever
-// waits for it (the tunnel in compose.prod.yaml) never starts. This pins the healthcheck to the binary's own probe.
+// waits for it (a `depends_on: service_healthy` service) never starts. This pins the healthcheck to the binary's own probe.
 func TestComposeHealthcheckUsesBinary(t *testing.T) {
 	compose, err := os.ReadFile("compose.yaml")
 	if err != nil {

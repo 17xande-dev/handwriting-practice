@@ -1,0 +1,64 @@
+# Kamal deploy for the Docker host (home-docker). `make deploy` runs the check
+# gate, then `kamal deploy`: build the image locally, push it to ghcr.io, and swap
+# it in behind kamal-proxy with a health check. Host-side setup (kamal-proxy and
+# the shared Cloudflare tunnel) lives in ~/dev/17xande.dev/infra.
+service: handwriting
+
+image: 17xande-dev/handwriting-practice
+
+registry:
+  server: ghcr.io
+  username: 17xande
+  # Read from .kamal/secrets.
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+# The host is linux/amd64. Building for it explicitly keeps an arm laptop honest.
+builder:
+  arch: amd64
+
+ssh:
+  user: ubuntu
+
+servers:
+  web:
+    hosts:
+      - home-docker
+    options:
+      # argon2id holds 64 MiB per sign-in (three at a time at most), and SQLite
+      # a page cache; this keeps a runaway from taking the host.
+      memory: 512m
+
+# Cloudflare terminates TLS and the shared tunnel forwards the hostname to
+# http://kamal-proxy:80, so kamal-proxy serves plain http and asks for no cert.
+# The runtime image is distroless (no shell, no wget), so kamal-proxy's HTTP
+# check of /healthz is the health check; the image sets no Docker HEALTHCHECK.
+proxy:
+  ssl: false
+  host: handwriting.17xande.dev
+  app_port: 8080
+  healthcheck:
+    path: /healthz
+
+env:
+  clear:
+    ADDR: ":8080"
+    # On the named volume below, so a redeploy keeps it. Daily VACUUM INTO
+    # backups land beside it, in /data/backups.
+    DB_PATH: /data/handwriting.db
+    # Cloudflare terminates https in front of it, so the browser always sees
+    # https.
+    HSTS: "1"
+    # Cloudflare overwrites this header with the connecting address, which is
+    # why it is preferred over X-Forwarded-For (a list a client can prepend
+    # to). Safe only while the shared tunnel is the sole way in: kamal-proxy
+    # publishes nothing on the host. A setup with another route to the app
+    # must not set this.
+    CLIENT_IP_HEADER: CF-Connecting-IP
+
+# The EXISTING docker volume on the host (from the old compose stack, project
+# `handwriting`, volume `data`). Keep this exact name so the database survives.
+# The image's /data is owned by the nonroot user it runs as (uid 65532), and the
+# old stack set no `user:`, so the volume is already writable by it.
+volumes:
+  - "handwriting_data:/data"

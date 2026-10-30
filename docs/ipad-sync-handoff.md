@@ -15,7 +15,7 @@ sync state and profiles follow the design of the owner's other practice app.
 | App sign-out    | `DELETE /api/token`                                            | `204`; the token is dead at once.                                                                                                                                              |
 | Sync            | `POST /api/sync`                                               | Push and pull in one round trip: cursor, tombstones, `rejected`. Kinds `check`, `ink`, `strokes` and `prefs`. Tested in `internal/handler/api_test.go` and `internal/history`. |
 | Web client      | `web/sync.ts`, `web/progress-store.ts`, `web/sync-triggers.ts` | The reference implementation of the client algorithm. Port its behaviour and its tests (`web/sync_test.ts`, `web/progress-store_test.ts`) where they translate.                |
-| Production host | `compose.prod.yaml`                                            | The server runs on a Docker host with nothing published; a Cloudflare tunnel is the only way in, and it sets `CF-Connecting-IP`. The base URL is a setting in the app.         |
+| Production host | `config/deploy.yml` (Kamal)                                    | The server runs on a Docker host with nothing published; a shared Cloudflare tunnel to kamal-proxy is the only way in, and it sets `CF-Connecting-IP`. The base URL is a setting in the app.         |
 
 ## What the Swift side must do
 

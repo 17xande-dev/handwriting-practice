@@ -290,6 +290,9 @@ docker compose exec server /calligraphy -add-admin you@example.com
 docker compose exec server /calligraphy -reset-password you@example.com
 ```
 
+(Those are for the local compose stack; for production see "Production: Kamal
+on the Docker host" below.)
+
 Both print a generated password once. Everything else about people (reset,
 disable, make admin, sign out everywhere, delete) is on `/admin/users`;
 signed-in people change their own password and see and sign out their
@@ -350,32 +353,60 @@ need cgo (SQLite); the Dockerfile builds a static musl binary and, because
 the TypeScript bundles are checked in and `make check` fails when they are
 stale, has no Deno stage.
 
-### Production: Docker host and Cloudflare Tunnel
+### Production: Kamal on the Docker host
 
-`compose.prod.yaml` is the stack for the Docker host: the `handwriting` service
-(no published ports, `HSTS=1`, `CLIENT_IP_HEADER=CF-Connecting-IP`, 512 MB) and
-a pinned `cloudflared` that runs the tunnel on the same compose network, so a
-remotely-managed tunnel's ingress `http://handwriting:8080` resolves. Nothing
-else can reach the app, which is what makes trusting `CF-Connecting-IP` safe.
-
-One-time, on the host: create `~/handwriting/.env` from `.env.example` with
-`TUNNEL_TOKEN` (from the Cloudflare Zero Trust dashboard; `.env` is gitignored
-and never copied by `make deploy`). Then, from a clean checkout of the commit
-to ship:
+Production is deployed with [Kamal](https://kamal-deploy.org) (`config/deploy.yml`).
+The host (`home-docker`) runs kamal-proxy with nothing published, behind one
+shared Cloudflare tunnel; that host-side setup lives in `~/dev/17xande.dev/infra`.
+The tunnel's public hostname `handwriting.17xande.dev` has service
+`http://kamal-proxy:80`, and kamal-proxy routes by host to the app (port 8080,
+health check `/healthz`). Cloudflare terminates TLS, so Kamal runs with
+`proxy.ssl: false`. Nothing else can reach the app, which is what makes trusting
+`CF-Connecting-IP` safe. The app runs with a 512 MB limit and the existing
+`handwriting_data` volume at `/data`.
 
 ```sh
-make deploy                              # DEPLOY_HOST=ubuntu@192.168.0.29 by default
-make deploy DEPLOY_HOST=user@other-host
+make deploy                        # check gate, then kamal deploy (build, push to ghcr.io, swap in)
+make deploy KAMAL=$HOME/.local/share/gem/ruby/3.4.0/bin/kamal   # if kamal is not on PATH
+kamal rollback <version>           # back to an earlier image; `kamal app version` / `kamal app containers` list them
+make logs-prod                     # kamal app logs -f
 ```
 
-which is `git archive HEAD | ssh $DEPLOY_HOST 'mkdir -p ~/handwriting && tar -x -C ~/handwriting'`
-followed by `ssh $DEPLOY_HOST 'cd ~/handwriting && sudo docker compose -f compose.prod.yaml up -d --build'`.
-The named volume keeps the database across deploys. The first admin on the host:
-`sudo docker compose -f compose.prod.yaml exec handwriting /calligraphy -add-admin you@example.com`.
+`make deploy` refuses uncommitted tracked changes, since Kamal builds from
+`HEAD`. Registry login is `gh auth token` (see `.kamal/secrets`). The app has no
+secrets of its own.
+
+Operating production (run from this repo; `kamal` as above). Only the
+`kamal app logs` form is exercised by `make logs-prod`; the rest are reasoned
+from Kamal's and the image's behaviour and **untested**:
+
+```sh
+# First admin, or a lockout reset. --reuse execs in the running container,
+# which keeps its env (DB_PATH). Without it Kamal starts a fresh container,
+# and the image's ENTRYPOINT (/calligraphy) would be prefixed to the command.
+kamal app exec -i --reuse "/calligraphy -add-admin you@example.com"
+kamal app exec -i --reuse "/calligraphy -reset-password you@example.com"
+
+# Logs
+kamal app logs -f            # or: kamal app logs --since 1h
+
+# Backups: the daily VACUUM INTO copies are in /data/backups (last seven kept).
+# The image has no shell or tar, so read the volume from a throwaway container
+# on the host (ssh ubuntu@home-docker):
+docker run --rm -v handwriting_data:/data -v "$PWD":/out busybox cp /data/backups/<file>.db /out/
+docker run --rm -v handwriting_data:/data busybox ls -l /data/backups
+
+# Restore: stop the app, put the copy in place, start it again. The files must
+# end up owned by uid 65532 (the nonroot user the app runs as).
+kamal app stop
+docker run --rm -v handwriting_data:/data -v "$PWD":/in busybox \
+  sh -c 'cp /in/<file>.db /data/handwriting.db && rm -f /data/handwriting.db-wal /data/handwriting.db-shm && chown 65532:65532 /data/handwriting.db'
+kamal app boot
+```
 
 Cloudflare settings for the hostname:
 
-- The tunnel's public hostname points at `http://handwriting:8080`. Do not set
+- The tunnel's public hostname points at `http://kamal-proxy:80`. Do not set
   an `httpHostHeader` override: the cross-origin check compares `Origin` with
   the request's `Host`, so rewriting `Host` breaks every sign-in and sync POST.
 - Turn off Email Obfuscation and Rocket Loader for this hostname (a

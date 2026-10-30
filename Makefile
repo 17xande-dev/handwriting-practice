@@ -1,4 +1,4 @@
-.PHONY: deploy run bundle build test vet fmt check vulncheck vulncheck-install up down fonts-fetch fixtures glyphs
+.PHONY: deploy logs-prod run bundle build test vet fmt check vulncheck vulncheck-install up down fonts-fetch fixtures glyphs
 
 ADDR ?= :8083
 DB_PATH ?= $(HOME)/.local/share/handwriting/handwriting.db
@@ -63,16 +63,24 @@ check:
 	@command -v govulncheck >/dev/null || { echo "govulncheck is missing: make vulncheck-install"; exit 1; }
 	govulncheck ./...
 
-DEPLOY_HOST ?= ubuntu@192.168.0.29
+# The gem's bin dir is not on PATH everywhere; override with `make deploy KAMAL=/path/to/kamal`.
+KAMAL ?= kamal
 
-## deploy: copy HEAD to the Docker host (DEPLOY_HOST=user@host) and rebuild and restart the stack there
-deploy:
-	git archive HEAD | ssh $(DEPLOY_HOST) 'mkdir -p ~/handwriting && tar -x -C ~/handwriting'
-	ssh $(DEPLOY_HOST) 'cd ~/handwriting && sudo docker compose -f compose.prod.yaml up -d --build'
+## deploy: run the check gate, then `kamal deploy` (build, push to ghcr.io, swap in on home-docker)
+deploy: check
+	@# Kamal builds from HEAD, not the working tree, so refuse edits the checks just ran against.
+	@git diff --quiet HEAD -- || { echo "deploy: tracked files have uncommitted changes; commit first so the tag names what runs" >&2; exit 1; }
+	$(KAMAL) deploy
 
+## logs-prod: follow the production app's logs
+logs-prod:
+	$(KAMAL) app logs -f
+
+## up: build and run the local compose stack
 up:
 	docker compose up -d --build
 
+## down: stop the local compose stack
 down:
 	docker compose down
 
