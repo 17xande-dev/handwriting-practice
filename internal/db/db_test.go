@@ -1,6 +1,7 @@
 package db_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,5 +211,35 @@ func TestPrefsMigrationKeepsRecords(t *testing.T) {
 	}
 	if _, err := d.Exec(`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'sketch', 's', '{}')`); err == nil {
 		t.Fatal("an unknown kind was accepted")
+	}
+}
+
+// A transaction holds the write lock from the moment it begins, so a read
+// followed by a write inside it cannot be invalidated by another connection's
+// commit in between ("database is locked", which busy_timeout cannot cure).
+func TestTransactionsBeginImmediate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := db.Migrate(d); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	// A second handle with no wait: it can only write if tx holds no lock yet.
+	other, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	_, err = other.Exec(`INSERT INTO users (email, password_hash, created_at) VALUES ('a@x.com', 'h', '')`)
+	if err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("a write succeeded while a transaction was open (err = %v); transactions must begin immediate", err)
 	}
 }

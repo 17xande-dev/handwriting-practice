@@ -217,11 +217,14 @@ func replaceIfNewer(ctx context.Context, tx *sql.Tx, userID int64, r Record) err
 	var have sql.NullString
 	err := tx.QueryRowContext(ctx, `SELECT data FROM records WHERE user_id = ? AND kind = ? AND id = ?`,
 		userID, r.Kind, r.ID).Scan(&have)
-	if err == sql.ErrNoRows || !have.Valid {
+	if err == sql.ErrNoRows {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if !have.Valid {
+		return nil
 	}
 	if recordTS(json.RawMessage(have.String)) >= recordTS(r.Data) {
 		return nil

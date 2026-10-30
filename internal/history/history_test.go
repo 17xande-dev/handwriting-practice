@@ -370,3 +370,23 @@ func TestCheckRecordRefusesFarFutureTSForMutableKinds(t *testing.T) {
 		t.Fatalf("%q %v", id, err)
 	}
 }
+
+// Only "no row" means the id is absent. Any other read failure must surface:
+// swallowing it would let the insert that follows succeed as a no-op while the
+// client drops the edit as synced.
+func TestReplaceIfNewerReportsReadErrors(t *testing.T) {
+	s, a, _ := setup(t)
+	if err := s.Push(ctx, a, []Record{strokesRec("strokes-x", 10)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	dead, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := replaceIfNewer(dead, tx, a, strokesRec("strokes-x", 20)); err == nil {
+		t.Fatal("a failed read was treated as an absent record")
+	}
+}

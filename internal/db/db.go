@@ -29,13 +29,18 @@ var migrationsFS embed.FS
 //     readers carry on during a write. It needs the directory writable (it
 //     creates -wal and -shm files) and makes a plain `cp` of the file an
 //     unsafe backup, so backups use VACUUM INTO.
+//   - _txlock=immediate: a transaction takes the write lock when it begins.
+//     SQLite's default (deferred) lets a transaction that reads first and
+//     writes later fail with "database is locked" the moment another write
+//     commits in between, and busy_timeout cannot help: the snapshot it
+//     read is stale. Every transaction here may write, so none loses by it.
 //   - busy_timeout is left at the driver's 5s default.
 //
 // Schema changes go through a numbered migration, never an ALTER run on
 // startup: on a STRICT table that leaves the database diverged from the
 // schema files.
 func Open(path string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_foreign_keys=on&_journal_mode=WAL", path)
+	dsn := fmt.Sprintf("file:%s?_foreign_keys=on&_journal_mode=WAL&_txlock=immediate", path)
 	d, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("db: open %s: %w", path, err)
