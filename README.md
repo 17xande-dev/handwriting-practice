@@ -400,8 +400,11 @@ docker run --rm -v handwriting_data:/data busybox ls -l /data/backups
 # end up owned by uid 65532 (the nonroot user the app runs as). `kamal` lines
 # run from this repo on your laptop; the `docker run` line runs ON home-docker
 # (ssh ubuntu@home-docker), where the volume lives. It overwrites the live
-# database, so take a copy first (the backup commands above).
+# database, so stop the app and copy the CURRENT one out first (the pre-restore
+# copy, with its -wal/-shm files).
 kamal app stop
+docker run --rm -v handwriting_data:/data -v "$PWD":/out busybox \
+  sh -c 'cp /data/handwriting.db* /out/'   # ON home-docker: the pre-restore copy
 docker run --rm -v handwriting_data:/data -v "$PWD":/in busybox \
   sh -c 'cp /in/<file>.db /data/handwriting.db && rm -f /data/handwriting.db-wal /data/handwriting.db-shm && chown 65532:65532 /data/handwriting.db'
 kamal app boot
