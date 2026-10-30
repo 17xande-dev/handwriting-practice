@@ -1,6 +1,6 @@
 // The pens' pure maths: the pressure curve, smoothing, the pointed nib's widths and taper, the
 // pencil's stamps and paper grain. A port of the iPad app's HandwritingCore/Pens.swift, specified
-// in its docs/pens.md; ink.ts draws the results. Nothing here touches a canvas.
+// in its pens contract; ink.ts draws the results. Nothing here touches a canvas.
 
 // ---- pressure curve ---------------------------------------------------------------------------
 

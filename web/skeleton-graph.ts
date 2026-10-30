@@ -1,5 +1,5 @@
 // A one-pixel skeleton as a graph, and snapping a drawn stroke onto it: a port of the iPad's
-// SkeletonGraph.swift and StrokeSnap.swift (docs/strokes.md, "Pipeline" and "Define strokes").
+// SkeletonGraph.swift and StrokeSnap.swift (the strokes contract, "Pipeline" and "Define strokes").
 // Nodes sit at endpoints and junctions, edges are pixel paths; junction clusters are merged and short
 // spurs pruned. The Stroke models editor snaps what the person draws onto the glyph's centreline.
 // Pure and deterministic.

@@ -1,7 +1,7 @@
 // M5 metrics, part 3: everything for one checked line in one value, the
 // sub-scores, the plain-language notes, the sheet summary and the record
 // members `metrics2` and `pen2`. A port of the iPad app's MetricScores.swift,
-// MetricsRecord.swift and CheckSummary.swift; see its docs/metrics.md.
+// MetricsRecord.swift and CheckSummary.swift; see its metrics contract.
 
 import { median } from "./evalcore.ts";
 import {
@@ -37,7 +37,7 @@ export interface SubScores {
   consistency?: number;
   penControl?: number;
   fluency?: number;
-  /** Stroke order and direction (docs/strokes.md); absent where the model font has no strokes for the line. */
+  /** Stroke order and direction (the strokes contract); absent where the model font has no strokes for the line. */
   order?: number;
 }
 
@@ -216,7 +216,7 @@ export function pickNotes(cs: Component[]): string[] {
     .slice(0, 2).map((x) => x.c.note);
 }
 
-/** What stroke order needs from a check (docs/strokes.md, `OrderInput(result:)`). */
+/** What stroke order needs from a check (the strokes contract, `OrderInput(result:)`). */
 export function orderInputOf(r: CheckResult): OrderInput {
   return {
     uMin: r.frame.uMin,

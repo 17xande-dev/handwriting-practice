@@ -389,7 +389,7 @@ Cloudflare settings for the hostname:
 ## Stroke order and direction
 
 Besides shape, a check judges whether each letter's strokes were made in the model's order and
-direction (the iPad app's M10; its `docs/strokes.md` is the contract, `web/stroke-order.ts` the port,
+direction (the iPad app's M10; its strokes contract is authoritative, `web/stroke-order.ts` the port,
 pinned by the golden vectors in `testdata/strokes`). The result is the **Order & direction** bar in
 Details, `scores.order` and `metrics2.order` in the check record, up to two notes, and flags on the
 letter chips. Built-in models for Edu SA Beginner and Briem Hand Unjoined are served from

@@ -1,10 +1,10 @@
 # iPad sync: handoff
 
-The server side of accounts and history sync, and the web client, are done in this repo. The iPad
-app (`~/dev/handwriting-practice-app`, milestone M8) has **not been changed**. This page is the
-brief for the session that adds sync there. The wire contract is [`sync-api.md`](sync-api.md); read
-it first, especially "Record identity", which the Swift side must copy exactly. The app is modelled
-on `~/dev/music-practice-app`, whose `SyncClient`, `SyncState` and `Profiles` are the thing to port.
+The server side of accounts and history sync, and the web client, are done in this repo. This page
+was the brief for adding sync to the iPad app; the app is a separate codebase, so what it has
+implemented of this is not recorded here. The wire contract is [`sync-api.md`](sync-api.md); read it
+first, especially "Record identity", which the Swift side must copy exactly. The app's sync client,
+sync state and profiles follow the design of the owner's other practice app.
 
 ## What already exists (this repo)
 
@@ -13,9 +13,9 @@ on `~/dev/music-practice-app`, whose `SyncClient`, `SyncState` and `Profiles` ar
 | Accounts        | `internal/account`, `/admin/users`                             | An admin creates the account at `/admin/users` and a password is generated and shown once. There is no sign-up. The first admin is `calligraphy -add-admin EMAIL`.             |
 | App sign-in     | `POST /api/token`                                              | Returns a bearer token that lasts until revoked. Rate-limited, one failure message. The `label` you send (the device name) is what `/account` lists under "Signed-in devices". |
 | App sign-out    | `DELETE /api/token`                                            | `204`; the token is dead at once.                                                                                                                                              |
-| Sync            | `POST /api/sync`                                               | Push and pull in one round trip: cursor, tombstones, `rejected`. Kinds `check` and `ink`. Tested in `internal/handler/api_test.go` and `internal/history`.                     |
+| Sync            | `POST /api/sync`                                               | Push and pull in one round trip: cursor, tombstones, `rejected`. Kinds `check`, `ink`, `strokes` and `prefs`. Tested in `internal/handler/api_test.go` and `internal/history`. |
 | Web client      | `web/sync.ts`, `web/progress-store.ts`, `web/sync-triggers.ts` | The reference implementation of the client algorithm. Port its behaviour and its tests (`web/sync_test.ts`, `web/progress-store_test.ts`) where they translate.                |
-| Production host | to be decided                                                  | The server runs behind the owner's own reverse proxy on a Proxmox Docker host; the domain is not chosen yet, so the base URL is a setting in the app.                          |
+| Production host | `compose.prod.yaml`                                            | The server runs on a Docker host with nothing published; a Cloudflare tunnel is the only way in, and it sets `CF-Connecting-IP`. The base URL is a setting in the app.         |
 
 ## What the Swift side must do
 
@@ -55,7 +55,8 @@ on `~/dev/music-practice-app`, whose `SyncClient`, `SyncState` and `Profiles` ar
   - a generation counter, so a response that arrives after a sign-out (and sign-in) is discarded.
     Every bump of the counter also frees the single-flight slot, or the next sync would join the
     abandoned round and get its stale answer for ever;
-  - handle every kind (`check`, `ink`, `strokes`, `prefs`) generically (the iPad will be the main writer of `ink`).
+  - handle every kind (`check`, `ink`, `strokes`, `prefs`) generically (the iPad will be the main
+    writer of `ink`).
 - **Queueing in the store:** while sync is on, `add` and `addInk` append to `pendingAdds` and
   restore queues what it added (and drops a not-yet-sent `pendingDeletes` entry for the same record,
   so restoring right after a Clear, before the next sync, isn't undone by the delete); Clear history
@@ -65,18 +66,20 @@ on `~/dev/music-practice-app`, whose `SyncClient`, `SyncState` and `Profiles` ar
   `sync-api.md`), keeping it under 64 KB by simplifying, not by letting the server reject it. If the
   shape needs to change, change `sync-api.md` in the same commit and tell the web (W2 reads the same
   records).
-- **Favourite fonts (`prefs` record).** One mutable record, `id` `"prefs-favourites"`, shape and rules in
-  `sync-api.md` (`### prefs`): `favourites` is an ordered array of `{id, kind: "builtin"|"google"|"custom",
-  family, variant?}`; builtin ids are the FontCatalog ids, Google and custom ones are `"google:<family>"`.
-  Treat it like `strokes`: every edit sets `ts` to now (above the old one) and queues the record; a
-  pulled record replaces the local one only if its `ts` is greater; keep unknown members and fields in
-  place when writing it back; a pulled tombstone resets to the defaults (the built-in fonts in catalogue
-  order, `ts` 0, nothing to push). The web writes the family's first font id for a builtin family tile
-  and treats any id of a family as that family, so a font-level favourite from the iPad shows as its
-  family there. The server accepts the kind once its migration (`0003_prefs_kind.sql`) has run.
+- **Favourite fonts (`prefs` record).** One mutable record, `id` `"prefs-favourites"`, shape and
+  rules in `sync-api.md` (`### prefs`): `favourites` is an ordered array of
+  `{id, kind: "builtin"|"google"|"custom",
+  family, variant?}`; builtin ids are the FontCatalog
+  ids, Google and custom ones are `"google:<family>"`. Treat it like `strokes`: every edit sets `ts`
+  to now (above the old one) and queues the record; a pulled record replaces the local one only if
+  its `ts` is greater; keep unknown members and fields in place when writing it back; a pulled
+  tombstone resets to the defaults (the built-in fonts in catalogue order, `ts` 0, nothing to push).
+  The web writes the family's first font id for a builtin family tile and treats any id of a family
+  as that family, so a font-level favourite from the iPad shows as its family there. The server
+  accepts the kind once its migration (`0003_prefs_kind.sql`) has run.
 - **Keychain.** Store the token as a generic-password item. Never in a file or `UserDefaults`.
-- **URLSession transport** in the app target. The base URL is a setting (Settings page), because the
-  domain is still to be chosen; a plain-HTTP LAN server needs an ATS exception
+- **URLSession transport** in the app target. The base URL is a setting (Settings page), because it
+  differs between a LAN server and production; a plain-HTTP LAN server needs an ATS exception
   (`NSAllowsLocalNetworking` or an exception domain), in DEBUG builds only if production is HTTPS.
 - **Progress page "Sync" section:** signed out shows "Sign in" (email and password sheet, calling
   `POST /api/token` with `label: UIDevice.current.name`); signed in shows "Synced with <email> · 2

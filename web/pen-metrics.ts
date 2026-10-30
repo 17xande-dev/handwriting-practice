@@ -1,7 +1,7 @@
 // M5 metrics, part 2: pen control and fluency, from the strokes alone
 // (pressure, angles, timestamps), plus the model's piece count for pen lifts
 // (informational). A port of the iPad app's PenMetrics.swift; see its
-// docs/metrics.md. Pressure metrics stay scale-free: no absolute pressure threshold.
+// the metrics contract. Pressure metrics stay scale-free: no absolute pressure threshold.
 
 import { median } from "./evalcore.ts";
 import type { Stroke } from "./ink.ts";

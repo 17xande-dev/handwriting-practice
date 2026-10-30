@@ -1,6 +1,6 @@
 /// <reference lib="deno.ns" />
 
-// The golden vectors of the iPad app's docs/strokes.md (copied to testdata/strokes, made by its
+// The golden vectors of the iPad app's strokes contract (copied to testdata/strokes, made by its
 // Swift core): resampling, the pair tests, trimming, the letter judging and whole lines must come
 // out the same here. Numbers match within 1e-6 relative to max(1, |x|); strings, integers,
 // booleans and nulls exactly.

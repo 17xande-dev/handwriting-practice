@@ -1,4 +1,4 @@
-// The person's own stroke definitions (iPad docs/strokes.md, "Define strokes and the user store"
+// The person's own stroke definitions (the iPad app's strokes contract, "Define strokes and the user store"
 // and "Sync"): one file per model font, in the schema of the built-in strokes/<modelId>.json,
 // kept on this device as `strokes` records in IndexedDB (the same records the sync carries) and so
 // shared with the iPad.

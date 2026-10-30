@@ -1,6 +1,6 @@
 /// <reference lib="deno.ns" />
 
-// The ink golden vectors of the iPad app's docs/metrics.md (testdata/metrics):
+// The ink golden vectors of the iPad app's metrics contract (testdata/metrics):
 // an ink record must come out byte for byte the same here, and malformed ones
 // must decode without throwing.
 

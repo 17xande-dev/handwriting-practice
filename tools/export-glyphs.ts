@@ -1,6 +1,6 @@
 // Writes testdata/glyphs/<font>.json: every character of a set (a-z, 0-9 by default) rendered
 // alone on a model font, as the model raster the web app scores against (the `model` member of
-// a parity fixture). The iPad app's stroke-model pipeline (docs/strokes.md, M10) skeletonises
+// a parity fixture). The iPad app's stroke-model pipeline (the strokes contract, M10) skeletonises
 // these to build strokes/<model>.json. Run with `make glyphs`.
 //
 // Needs Chromium (CHROMIUM, default /usr/bin/chromium), Deno and Go, and the network (the Google

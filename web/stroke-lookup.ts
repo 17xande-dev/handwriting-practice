@@ -1,5 +1,5 @@
 // The lookup the checks use: the person's own definitions first (the `strokes` records on this
-// device, which a sync keeps up to date), then the built-in model (docs/strokes.md, "Lookup order").
+// device, which a sync keeps up to date), then the built-in model (the strokes contract, "Lookup order").
 // A character with no entry in either is not judged.
 
 import { assemble, type StrokesRec, userLookup } from "./stroke-defs.ts";

@@ -152,7 +152,7 @@ export function renderPanel(m: LineMetrics): HTMLElement {
     bar("Pen control", s.penControl),
     bar("Fluency", s.fluency),
   );
-  // Only measured where the model font has strokes for the line (docs/strokes.md).
+  // Only measured where the model font has strokes for the line (the strokes contract).
   if (s.order !== undefined) bars.append(bar("Order & direction", s.order));
   panel.append(bars);
   if (m.notes.length) {

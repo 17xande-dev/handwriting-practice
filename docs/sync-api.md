@@ -2,48 +2,51 @@
 
 How the web app and the iPad app sync checked lines (and the ink of each attempt) through the
 server. The server side lives in `internal/handler/api.go` (HTTP) and `internal/history` (storage);
-the web client is `web/sync.ts` and `web/progress-store.ts`. Both clients follow the algorithm at the
-end of this page. It is the same contract as music-practice's, with different record kinds.
+the web client is `web/sync.ts` and `web/progress-store.ts`. Both clients follow the algorithm at
+the end of this page. It is the contract the owner's other practice app uses, with different record kinds.
 
 ## Model
 
 - **Local first.** Each device keeps its own history (IndexedDB on the web, files on the iPad) and
   works offline and signed out. The server is where a signed-in user's devices swap records.
-- **A record is immutable.** Syncing is a union by `(kind, id)`.
+- **Records are added, and only `strokes` and `prefs` are edited.** Syncing is a union by
+  `(kind, id)`: a `check` or `ink` record is never changed once stored, while a `strokes` or `prefs`
+  record is replaced by a greater `ts` (see their sections).
 - **Kinds:**
 
-  | kind    | what it is                                                | web type (`web/progress-store.ts`) |
-  | ------- | --------------------------------------------------------- | ---------------------------------- |
-  | `check` | one checked line: score, letters, metrics                 | `CheckRecord`                      |
-  | `ink`   | the quantized strokes of one checked attempt (see below)  | `InkRecord`                        |
-  | `strokes` | a person's stroke definitions for one font (see below)  | `StrokesRecord`                    |
-  | `prefs` | the person's preferences: the favourite fonts (see below) | `FavouritesRecord` (`web/favourites.ts`) |
+  | kind      | what it is                                                | web type (`web/progress-store.ts`)       |
+  | --------- | --------------------------------------------------------- | ---------------------------------------- |
+  | `check`   | one checked line: score, letters, metrics                 | `CheckRecord`                            |
+  | `ink`     | the quantized strokes of one checked attempt (see below)  | `InkRecord`                              |
+  | `strokes` | a person's stroke definitions for one font (see below)    | `StrokesRecord`                          |
+  | `prefs`   | the person's preferences: the favourite fonts (see below) | `FavouritesRecord` (`web/favourites.ts`) |
 
   The server accepts exactly these four kinds (a database `CHECK` constraint, migrations `0002` and
   `0003`, and `history.Kinds`). Anything else lands in `rejected`. `check` and `ink` records are
-  immutable; `strokes` and `prefs` records are mutable, the greater `ts` winning (see their sections).
-- **Deletions are tombstones.** Clearing history on one device sends the removed ids (of check and ink; strokes definitions are not history and are not cleared).
-  The server keeps a tombstone, so every other device deletes them too, and a device that hasn't
-  heard yet can't resurrect them by pushing them again: a tombstoned id stays deleted.
-- **Cursor.** Every stored record and tombstone gets a new, increasing sequence number. A client keeps
-  the highest one it has seen and asks only for changes after it.
+  immutable; `strokes` and `prefs` records are mutable, the greater `ts` winning (see their
+  sections).
+- **Deletions are tombstones.** Clearing history on one device sends the removed ids (of check and
+  ink; strokes definitions are not history and are not cleared). The server keeps a tombstone, so
+  every other device deletes them too, and a device that hasn't heard yet can't resurrect them by
+  pushing them again: a tombstoned id stays deleted.
+- **Cursor.** Every stored record and tombstone gets a new, increasing sequence number. A client
+  keeps the highest one it has seen and asks only for changes after it.
 
 ## Record identity (web and iPad must agree)
 
 Every record has `id` (a string of 1-64 **bytes of UTF-8**, opaque to everyone except where stated
-here: count `s.utf8.count` in Swift, not characters or UTF-16 units) and `ts` (a number greater than 0).
-The member names are exactly `id` and `ts`, lower case. The server checks nothing else about a record
-except its size and that no two of its top-level member names are equal when compared case-insensitively
-(`"id"` and `"ID"`, or a repeated name).
+here: count `s.utf8.count` in Swift, not characters or UTF-16 units) and `ts` (a number greater than
+0). The member names are exactly `id` and `ts`, lower case. The server checks nothing else about a
+record except its size and that no two of its top-level member names are equal when compared
+case-insensitively (`"id"` and `"ID"`, or a repeated name).
 
 - **`ts` is `at`.** For a check, `ts` equals the record's `at`, the time the line was checked
   (milliseconds since the epoch), which must be greater than 0 (the server refuses a non-positive
-  `ts`, so a client must not make or accept a check whose `at` is not). The same goes for a `ts` that
-  is not finite. For the mutable kinds (`strokes`, `prefs`) the server also refuses a `ts` more than one
-  day ahead of its own clock (reason `"ts in the future"`), because a far-future `ts` would pin the
-  record: no later honest edit could replace it. It is never the time of the add
-  or the upload. An `ink` record's
-  `ts` is the `at` of the check it belongs to.
+  `ts`, so a client must not make or accept a check whose `at` is not). The same goes for a `ts`
+  that is not finite. For the mutable kinds (`strokes`, `prefs`) the server also refuses a `ts` more
+  than one day ahead of its own clock (reason `"ts in the future"`), because a far-future `ts` would
+  pin the record: no later honest edit could replace it. It is never the time of the add or the
+  upload. An `ink` record's `ts` is the `at` of the check it belongs to.
 - **A record with an `id` keeps it.** Whenever it is loaded, imported or uploaded.
 - **A new record gets a random UUID** (lowercase, v4). The web falls back to building a v4 UUID from
   `crypto.getRandomValues` where `crypto.randomUUID` is unavailable (a plain-HTTP page).
@@ -60,10 +63,10 @@ except its size and that no two of its top-level member names are equal when com
 
   - `decimal(at)` is the base-10 integer, no separators, no exponent or sign for current dates.
   - `base36(at)` is lowercase `0-9a-z`, no padding.
-  - `hex(...)` is lowercase hex of the 53-bit hash as an unsigned integer, **no zero padding**
-    (so its length varies; the whole id is at most 6 + 9 + 1 + 14 = 30 characters).
-  - `cyrb53` runs over the **UTF-16 code units** of `s` (JavaScript's `charCodeAt`; in Swift, iterate
-    `s.utf16`), seed 0, with 32-bit wrapping multiplication:
+  - `hex(...)` is lowercase hex of the 53-bit hash as an unsigned integer, **no zero padding** (so
+    its length varies; the whole id is at most 6 + 9 + 1 + 14 = 30 characters).
+  - `cyrb53` runs over the **UTF-16 code units** of `s` (JavaScript's `charCodeAt`; in Swift,
+    iterate `s.utf16`), seed 0, with 32-bit wrapping multiplication:
 
     ```js
     function cyrb53(s) {
@@ -79,24 +82,25 @@ except its size and that no two of its top-level member names are equal when com
     }
     ```
 
-    In Swift: `Int32` wrapping multiply (`&*`) of the XORed values, `UInt32` shifts (`>>>` is a logical
-    shift of the 32-bit value), and the final value `(UInt64(h2 & 2097151) << 32) + UInt64(UInt32(bitPattern: h1))`.
+    In Swift: `Int32` wrapping multiply (`&*`) of the XORed values, `UInt32` shifts (`>>>` is a
+    logical shift of the 32-bit value), and the final value
+    `(UInt64(h2 & 2097151) << 32) + UInt64(UInt32(bitPattern: h1))`.
 
   Test vectors (also pinned by `web/progress-store_test.ts`):
 
-  | `at`            | `sheet`  | `line`                    | id                                |
-  | --------------- | -------- | ------------------------- | --------------------------------- |
-  | `1700000000000` | `arches` | `n m`                     | `legacy-loyw3v28-14cd5db9c318a8`  |
-  | `1700000000123` | `custom` | `Café ñ — “quoted”`       | `legacy-loyw3v5n-6a49beccf0e0d`   |
-  | `1700000000000.9` | `x`    | `y`                       | `legacy-loyw3v28-cd46e230def4c`   |
+  | `at`              | `sheet`  | `line`              | id                               |
+  | ----------------- | -------- | ------------------- | -------------------------------- |
+  | `1700000000000`   | `arches` | `n m`               | `legacy-loyw3v28-14cd5db9c318a8` |
+  | `1700000000123`   | `custom` | `Café ñ — “quoted”` | `legacy-loyw3v5n-6a49beccf0e0d`  |
+  | `1700000000000.9` | `x`      | `y`                 | `legacy-loyw3v28-cd46e230def4c`  |
 
   and `cyrb53("")` is `bdcb81aee8d83`, `cyrb53("a")` is `1c2ba782c97901`.
 - **Backups dedupe on `at|sheet|line`**, unchanged from before sync, and the web also skips a pulled
   record whose `at|sheet|line` it already has under a different id.
-- **Never rewrite the store from a filtered view.** A stored record that fails validation (an unknown
-  `pen` written by a newer client, say) is kept as it is: it is skipped in views and merges, never
-  dropped when the store is rewritten after an add or a merge. The web adds only `id` and `ts` to old
-  records and changes nothing else.
+- **Never rewrite the store from a filtered view.** A stored record that fails validation (an
+  unknown `pen` written by a newer client, say) is kept as it is: it is skipped in views and merges,
+  never dropped when the store is rewritten after an add or a merge. The web adds only `id` and `ts`
+  to old records and changes nothing else.
 
 ## Record shapes
 
@@ -126,17 +130,26 @@ Unknown extra fields must be carried untouched.
 
 ### `ink`
 
-The packed strokes of one checked attempt, so a check can be shown again and replayed. One ink record
-per recorded check: `id` is `"<checkId>-ink"` (so a check id over 60 bytes gets none), `ts` is the
-check's `at`, at most 64 KB (the writer targets 60,000 bytes and drops points until it fits). The web
-writes them (`web/ink-codec.ts`); the byte layout, quantisation, deltas against the reconstructed
-previous point, decimation and decoding rules are the iPad repo's `docs/metrics.md` ("Ink record"),
-pinned by the golden vectors in `testdata/metrics/ink.json` and `ink-decode.json`:
+The packed strokes of one checked attempt, so a check can be shown again and replayed. One ink
+record per recorded check: `id` is `"<checkId>-ink"` (so a check id over 60 bytes gets none), `ts`
+is the check's `at`, at most 64 KB (the writer targets 60,000 bytes and drops points until it fits).
+The web writes them (`web/ink-codec.ts`); the byte layout, quantisation, deltas against the
+reconstructed previous point, decimation and decoding rules are the iPad app's metrics contract
+("Ink record"), pinned by the golden vectors in `testdata/metrics/ink.json` and `ink-decode.json`:
 
 ```json
-{"id":"<checkId>-ink","ts":1760000000000,"check":"<checkId>","v":1,
- "pen":{"kind":"monoline","weight":3,"input":"pencil"},"xh":36.4,"dec":1,
- "strokes":[{"fr":false,"rr":null,"t0":0,"o":[99,-962],"d":"<base64, 10 bytes per point>"}]}
+{
+  "id": "<checkId>-ink",
+  "ts": 1760000000000,
+  "check": "<checkId>",
+  "v": 1,
+  "pen": { "kind": "monoline", "weight": 3, "input": "pencil" },
+  "xh": 36.4,
+  "dec": 1,
+  "strokes": [
+    { "fr": false, "rr": null, "t0": 0, "o": [99, -962], "d": "<base64, 10 bytes per point>" }
+  ]
+}
 ```
 
 A check record may also carry `metrics2` and `pen2` (same document); readers that do not know them
@@ -145,28 +158,43 @@ ignore them, and a `pen` of any non-empty string is accepted (the iPad adds "poi
 ### `strokes`
 
 A person's own stroke definitions (order and direction of each letter's pen strokes) for one font,
-written on the iPad's "Stroke models" screen (iPad repo `docs/strokes.md`, "Sync"; the web's /strokes page
-writes them in the same shape and the worksheets judge by them). One record per font: `id` is `"strokes-<fontId>"`
-(the catalogue font id, or `custom-<family>` for a custom font), `ts` is the time of the last edit. It
-must stay within 64 KB, so a font with many definitions is split by glyph range into parts, each
-holding the glyphs of a contiguous range of characters and carrying the same `ts`. Part 0 is
-`"strokes-<fontId>"`; later parts are `"strokes-<fontId>~<n>"` (n from 1). The `~` cannot occur in a
-font id (it is not in the catalogue ids, nor in a Google family name), so the id of a part of one font
-never equals the id of another font's part 0 (with `-` it did: part 1 of `custom-a` against part 0 of
-a font `custom-a-1`). The server accepts any id of 1-64 bytes, `~` included:
+written on the iPad's "Stroke models" screen (the iPad app's strokes contract, "Sync"; the web's
+/strokes page writes them in the same shape and the worksheets judge by them). One record per font:
+`id` is `"strokes-<fontId>"` (the catalogue font id, or `custom-<family>` for a custom font), `ts`
+is the time of the last edit. It must stay within 64 KB, so a font with many definitions is split by
+glyph range into parts, each holding the glyphs of a contiguous range of characters and carrying the
+same `ts`. Part 0 is `"strokes-<fontId>"`; later parts are `"strokes-<fontId>~<n>"` (n from 1). The
+`~` cannot occur in a font id (it is not in the catalogue ids, nor in a Google family name), so the
+id of a part of one font never equals the id of another font's part 0 (with `-` it did: part 1 of
+`custom-a` against part 0 of a font `custom-a-1`). The server accepts any id of 1-64 bytes, `~`
+included:
 
 ```json
-{"id":"strokes-italic","ts":1760000000000,"v":1,"model":"italic",
- "glyphs":{"a":{"strokes":[{"pts":[[0.675,-0.875],[0.45,-0.95]],"kind":"main"}],
-                "verified":true,"origin":"user","confidence":1}}}
+{
+  "id": "strokes-italic",
+  "ts": 1760000000000,
+  "v": 1,
+  "model": "italic",
+  "glyphs": {
+    "a": {
+      "strokes": [{ "pts": [[0.675, -0.875], [0.45, -0.95]], "kind": "main" }],
+      "verified": true,
+      "origin": "user",
+      "confidence": 1
+    }
+  }
+}
 ```
 
 `glyphs` is the `glyphs` object of a stroke model file. **Unlike the other kinds a strokes record is
-edited in place:** when a pushed `strokes` record has the same id as a live stored one and a **greater
-`ts`**, the server replaces it (the row takes a new seq, so every device pulls the new version); an
-equal or older `ts` is ignored, and a tombstoned id stays deleted. A client merges a pulled strokes
-record the same way: keep the one with the greater `ts`. A client that edits a font and finds more
-parts than it now needs deletes the surplus ids.
+edited in place:** when a pushed `strokes` record has the same id as a live stored one and a
+**greater `ts`**, the server replaces it (the row takes a new seq, so every device pulls the new
+version); an equal or older `ts` is ignored, and a tombstoned id stays deleted. A client merges a
+pulled strokes record the same way: keep the one with the greater `ts`. A strokes record is never
+deleted by a client: the server keeps a tombstone of a mutable record for good, and a later push of
+that id is silently ignored (it is not even listed in `rejected`). A client that edits a font and
+finds more parts than it now needs therefore keeps the surplus ids and sends each with no glyphs
+(`"glyphs":{}`) and the same `ts` as the other parts.
 
 ### `prefs`
 
@@ -175,50 +203,60 @@ The person's preferences. For now one record, the favourite fonts: the fonts the
 time of the last edit in ms (so the last writer wins), `v` is 1.
 
 ```json
-{"id":"prefs-favourites","ts":1760000000000,"v":1,
- "favourites":[{"id":"italic","kind":"builtin","family":"Edu SA Beginner"},
-               {"id":"google:Caveat","kind":"google","family":"Caveat"},
-               {"id":"google:My Font","kind":"custom","family":"My Font"}]}
+{
+  "id": "prefs-favourites",
+  "ts": 1760000000000,
+  "v": 1,
+  "favourites": [
+    { "id": "italic", "kind": "builtin", "family": "Edu SA Beginner" },
+    { "id": "google:Caveat", "kind": "google", "family": "Caveat" },
+    { "id": "google:My Font", "kind": "custom", "family": "My Font" }
+  ]
+}
 ```
 
 - **Order** is the array order. A builtin family with several variants has one member per variant;
   they move and are removed together.
 - **`id` is at most 80 bytes of UTF-8** (`google:` plus a 64-character family is 71); a member over
   that is dropped on read by both clients.
-- **`removedVariants`** (optional, array of members shaped like `favourites`): the members an un-star
-  took out, so starring the family again restores all its variants (with none remembered, a client adds
-  the family's first font). Clients that do not know it keep it, in place, like any unknown member of the record.
-- Each member has `id`, `kind` (`"builtin"`, `"google"` or `"custom"`), `family` (the family name) and
-  optionally `variant` (a variant id; omitted means the whole family). For a `builtin`, `family` is
-  the catalogue group (tile) name and `id` is the
-  FontCatalog font id (`"italic"`, `"briem-print"`, ...); a client that lists families rather than fonts
-  (the web's family tiles) writes the id of the family's first font and treats any id of the family as
-  that family. For `google` (a family in the curated handwriting list) and `custom` (any other
-  Google Fonts name the person typed), `id` is `"google:<family>"` and `family` passes the
-  family-name rule (`^[A-Za-z0-9][A-Za-z0-9 -]{0,63}$`).
+- **`removedVariants`** (optional, array of members shaped like `favourites`): the members an
+  un-star took out, so starring the family again restores all its variants (with none remembered, a
+  client adds the family's first font). Clients that do not know it keep it, in place, like any
+  unknown member of the record.
+- Each member has `id`, `kind` (`"builtin"`, `"google"` or `"custom"`), `family` (the family name)
+  and optionally `variant` (a variant id; omitted means the whole family). For a `builtin`, `family`
+  is the catalogue group (tile) name and `id` is the FontCatalog font id (`"italic"`,
+  `"briem-print"`, ...); a client that lists families rather than fonts (the web's family tiles)
+  writes the id of the family's first font and treats any id of the family as that family. For
+  `google` (a family in the curated handwriting list) and `custom` (any other Google Fonts name the
+  person typed), `id` is `"google:<family>"` and `family` passes the family-name rule
+  (`^[A-Za-z0-9][A-Za-z0-9 -]{0,63}$`).
 - **Unknown members are preserved**: a client keeps, in place, a member of a kind it does not know
   (and any extra fields of a member or of the record) and writes it back as it was.
-- **Mutable by `ts`, like `strokes`:** a pushed `prefs` record with the same id as a live stored one and a
-  **greater `ts`** replaces it (the row takes a new seq, so every device pulls it); an equal or older
-  `ts` is ignored, and a tombstoned id stays deleted. A client merges a pulled record the same way: keep it
-  if its `ts` is greater than the local one's (no local record counts as 0), then refresh the toolbar.
-- **Every edit bumps `ts`** (to the edit time, and strictly above the record it replaced) and queues the
-  record. Before sign-in the favourites are only local; at the first sync both sides push and the
-  newer `ts` wins. A device that never edited them has no record (the defaults, `ts` 0) and sends nothing.
+- **Mutable by `ts`, like `strokes`:** a pushed `prefs` record with the same id as a live stored one
+  and a **greater `ts`** replaces it (the row takes a new seq, so every device pulls it); an equal
+  or older `ts` is ignored, and a tombstoned id stays deleted. A client merges a pulled record the
+  same way: keep it if its `ts` is greater than the local one's (no local record counts as 0), then
+  refresh the toolbar.
+- **Every edit bumps `ts`** (to the edit time, and strictly above the record it replaced) and queues
+  the record. Before sign-in the favourites are only local; at the first sync both sides push and
+  the newer `ts` wins. A device that never edited them has no record (the defaults, `ts` 0) and
+  sends nothing.
 
 ## Authentication
 
-- **Browser:** the `hp_session` cookie set by signing in at `/account`. Same-origin `fetch` sends it.
-  Cross-site requests are refused (403) by the server's cross-origin protection. The cookie is
-  `Secure`: browsers accept it from `https://` and from `http://localhost`, but not from a plain-HTTP
-  LAN address, so web sign-in needs HTTPS (or localhost). The iPad app uses a bearer token and does
-  not.
-- **App:** `Authorization: Bearer <token>`, from `POST /api/token`. A token lasts until it's revoked:
-  by signing out in the app, by "Sign out" on the account page's device list, by an admin, by a
-  password change or reset, or by the account being disabled or deleted. After any of these, every
-  request answers 401.
+- **Browser:** the `hp_session` cookie set by signing in at `/account`. Same-origin `fetch` sends
+  it. Cross-site requests are refused (403) by the server's cross-origin protection. The cookie is
+  `Secure`: browsers accept it from `https://` and from `http://localhost`, but not from a
+  plain-HTTP LAN address, so web sign-in needs HTTPS (or localhost). The iPad app uses a bearer
+  token and does not.
+- **App:** `Authorization: Bearer <token>`, from `POST /api/token`. A token lasts until it's
+  revoked: by signing out in the app, by "Sign out" on the account page's device list, by an admin,
+  by a password change or reset, or by the account being disabled or deleted. After any of these,
+  every request answers 401.
 
-Accounts are created by an admin at `/admin/users`, or the first one with `calligraphy -add-admin
+Accounts are created by an admin at `/admin/users`, or the first one with
+`calligraphy -add-admin
 EMAIL`. There is no sign-up endpoint.
 
 ## Endpoints
@@ -232,17 +270,17 @@ All bodies are JSON. Errors are `{"error": "message"}` with a 4xx/5xx status. Ev
 { "email": "a@example.com", "password": "…", "label": "Alex's iPad" }
 ```
 
-- `200` `{"token": "…", "email": "a@example.com"}`. Store the token in the Keychain. The label is what
-  the account page's device list shows (100 characters at most).
+- `200` `{"token": "…", "email": "a@example.com"}`. Store the token in the Keychain. The label is
+  what the account page's device list shows (100 characters at most).
 - `401` for every failure: unknown email, wrong password or disabled account. The message is always
   the same.
-- `400` when `email` is not a bare address (after trimming and lower-casing) or is over 254 bytes. This
-  is decided before the rate limiter, so it does not count as an attempt.
+- `400` when `email` is not a bare address (after trimming and lower-casing) or is over 254 bytes.
+  This is decided before the rate limiter, so it does not count as an attempt.
 - `429` when rate-limited: 5 attempts per email, then one a minute, plus a per-IP ceiling of 10 in a
   burst (an IPv6 client counts by its /64). Shared with the web sign-in form.
-- `503` with a `Retry-After` header (seconds) when the server is busy: at most 3 password checks run at
-  once, and a request waits up to 2 seconds for one. Nothing was decided; try again after the delay.
-  Treat it like any other 5xx (keep the credentials form, do not clear anything).
+- `503` with a `Retry-After` header (seconds) when the server is busy: at most 3 password checks run
+  at once, and a request waits up to 2 seconds for one. Nothing was decided; try again after the
+  delay. Treat it like any other 5xx (keep the credentials form, do not clear anything).
 - The request body is limited to 4 KB.
 
 ### `DELETE /api/token` - sign the app out
@@ -261,14 +299,14 @@ Limits on a request (a client must stay inside all of them):
 
 - At most **1000 records in total** across every kind in `push`, and at most **1000 entries in
   `deleted`**. More is `400` and nothing is stored. Clients send far fewer (below).
-- The body is at most 16 MB (`413` beyond that). Clients keep the record data of one request to about
-  **4 MB of JSON** (`4 * 1024 * 1024` bytes of serialized records, always at least one record) and at
-  most **500 records**, deletions at most 1000.
-- On `413`, halve the batch (records and bytes) and send again; a single record that still gets `413`
-  is an error to report, not to retry.
+- The body is at most 16 MB (`413` beyond that). Clients keep the record data of one request to
+  about **4 MB of JSON** (`4 * 1024 * 1024` bytes of serialized records, always at least one record)
+  and at most **500 records**, deletions at most 1000.
+- On `413`, halve the batch (records and bytes) and send again; a single record that still gets
+  `413` is an error to report, not to retry.
 
-Request (`push` and `deleted` may be omitted; `account` is optional on the wire, but the web and iPad
-always send it):
+Request (`push` and `deleted` may be omitted; `account` is optional on the wire, but the web and
+iPad always send it):
 
 ```json
 {
@@ -296,21 +334,22 @@ Response (always every key, always arrays, never `null`):
 }
 ```
 
-- **`account`** is the email the client believes it is signed in as (its stored sync state's `email`).
-  If it is present and, after trimming and lower-casing, differs from the authenticated user's email
-  (or is not a valid address), the server answers **`409` `{"error":"account mismatch"}`** and stores
-  and returns nothing. This is how a shared browser (or an app whose token was replaced) is stopped
-  from pushing one person's history into another's account. Omitting it skips the check.
-- **Server checks:** each pushed record must be a JSON object with a string `id` (1-64 bytes of UTF-8),
-  a numeric `ts` greater than 0, at most 64 KB, and no two top-level member names that match
-  case-insensitively. An unknown kind is rejected too. Anything else lands in `rejected` and the rest
-  of the push is still stored. Drop rejected records from the pending list rather than resending them
-  for ever. **A rejected record carries its `id` whenever the record has a string `id`, whatever the
-  reason** (size, `ts`, a case clash, an id of the wrong length); only a record with no string `id`, or
-  that is not a JSON object, is rejected without one.
+- **`account`** is the email the client believes it is signed in as (its stored sync state's
+  `email`). If it is present and, after trimming and lower-casing, differs from the authenticated
+  user's email (or is not a valid address), the server answers **`409`
+  `{"error":"account mismatch"}`** and stores and returns nothing. This is how a shared browser (or
+  an app whose token was replaced) is stopped from pushing one person's history into another's
+  account. Omitting it skips the check.
+- **Server checks:** each pushed record must be a JSON object with a string `id` (1-64 bytes of
+  UTF-8), a numeric `ts` greater than 0, at most 64 KB, and no two top-level member names that match
+  case-insensitively. An unknown kind is rejected too. Anything else lands in `rejected` and the
+  rest of the push is still stored. Drop rejected records from the pending list rather than
+  resending them for ever. **A rejected record carries its `id` whenever the record has a string
+  `id`, whatever the reason** (size, `ts`, a case clash, an id of the wrong length); only a record
+  with no string `id`, or that is not a JSON object, is rejected without one.
 - **Order:** the push is applied first (records, then deletions), then changes after `cursor` are
-  returned. The client's own just-pushed records therefore come back in `records`; merging by id makes
-  that harmless.
+  returned. The client's own just-pushed records therefore come back in `records`; merging by id
+  makes that harmless.
 - **Paging:** a response carries at most 1000 changes and at most about 4 MB of record data (a
   tombstone counts as a small constant), and always at least one change when there is one. `more` is
   true when either cap stopped the page. While `more` is true, call again with the new `cursor` and
@@ -318,14 +357,14 @@ Response (always every key, always arrays, never `null`):
 - **Atomic:** the push is one transaction. If the request fails, nothing was stored, and sending the
   same push again is safe.
 - `400`: malformed JSON, a negative cursor, or more than 1000 records or deletions. `409`: `account`
-  does not match the signed-in user (above). `413`: body over 16 MB. `401`: not signed in, meaning the token or cookie is
-  dead. A server fault while checking credentials is a `500`, never a `401`, so a client never drops a
-  live token because of a passing error.
+  does not match the signed-in user (above). `413`: body over 16 MB. `401`: not signed in, meaning
+  the token or cookie is dead. A server fault while checking credentials is a `500`, never a `401`,
+  so a client never drops a live token because of a passing error.
 
 ## Client algorithm
 
-Sync state is stored per device (web: the `meta` object store of IndexedDB, key `sync`, written in the
-same transaction as the change it follows; iPad: a file):
+Sync state is stored per device (web: the `meta` object store of IndexedDB, key `sync`, written in
+the same transaction as the change it follows; iPad: a file):
 
 ```json
 {
@@ -337,52 +376,51 @@ same transaction as the change it follows; iPad: a file):
 }
 ```
 
-Its absence means sync is off (signed out). The token itself is not stored here: the iPad keeps it in
-the Keychain, and the browser's cookie is HttpOnly.
+Its absence means sync is off (signed out). The token itself is not stored here: the iPad keeps it
+in the Keychain, and the browser's cookie is HttpOnly.
 
 1. **Recording** a check or ink record, while sync is on: append `{kind, id}` to `pendingAdds`.
    Restoring a backup queues every record it added.
-2. **Deleting** (Clear history), while sync is on: work out the ids actually removed, of check and ink,
-   append them to `pendingDeletes`, and drop them from `pendingAdds`.
+2. **Deleting** (Clear history), while sync is on: work out the ids actually removed, of check and
+   ink, append them to `pendingDeletes`, and drop them from `pendingAdds`.
 3. **Signing in** on a device that already has history: offer "Add this device's N records to
-   <email>?". On yes, queue every local record in `pendingAdds`. The server dedupes, so this is safe to
-   offer on every sign-in. Start with `cursor` 0 and sync.
+   <email>?". On yes, queue every local record in `pendingAdds`. The server dedupes, so this is safe
+   to offer on every sign-in. Start with `cursor` 0 and sync.
 4. **`sync()`:**
-   1. Take entries from the front of `pendingAdds`, up to 500 and until their serialized JSON reaches
-      4 MB (always at least one), looking each up in the local store. Entries whose record is gone
-      count as taken and send nothing.
+   1. Take entries from the front of `pendingAdds`, up to 500 and until their serialized JSON
+      reaches 4 MB (always at least one), looking each up in the local store. Entries whose record
+      is gone count as taken and send nothing.
    2. Send them with up to 1000 of `pendingDeletes`, the stored `cursor` and `account` (the stored
       `email`).
    3. If sync was turned off, or on again, while the request was out, throw the response away. The
       web checks this two ways: an in-memory generation counter (this tab), and by re-reading the
       stored sync state and comparing `email` (another tab changed it). Do the second wherever more
       than one process can change the state.
-   4. On `200`, remove exactly what was sent from the pending lists; entries queued while the request
-      was in flight stay. Remove the `rejected` ones too.
+   4. On `200`, remove exactly what was sent from the pending lists; entries queued while the
+      request was in flight stay. Remove the `rejected` ones too.
    5. Merge `records` into the local store: union by id (the web also skips a check whose
       `at|sheet|line` it already has). Skip any record deleted locally since the request went out.
    6. Remove the `deleted` ids locally, and from `pendingAdds`.
    7. Save `cursor` and `lastSyncAt`.
    8. Repeat while `more` is true or `pendingAdds` still has entries.
-5. **`401`:** turn sync off by removing the sync state (and the Keychain token on the iPad). Keep the
-   local history, and show "Signed out - sign in again to sync".
-   **`409`:** the session belongs to another account than the one this device syncs with. Remove the
-   sync state (queue and cursor included) as for `401`, keep the local history, and show that the
-   account changed; signing in again starts a fresh sync (with the offer to add this device's records
-   to the new account). On the iPad the token is still valid, so ask which account to use rather than
-   silently keeping it.
-   **`413`:** halve the batch (records and bytes) and retry the round; give up with an error if a single
-   record is refused.
+5. **`401`:** turn sync off by removing the sync state (and the Keychain token on the iPad). Keep
+   the local history, and show "Signed out - sign in again to sync". **`409`:** the session belongs
+   to another account than the one this device syncs with. Remove the sync state (queue and cursor
+   included) as for `401`, keep the local history, and show that the account changed; signing in
+   again starts a fresh sync (with the offer to add this device's records to the new account). On
+   the iPad the token is still valid, so ask which account to use rather than silently keeping it.
+   **`413`:** halve the batch (records and bytes) and retry the round; give up with an error if a
+   single record is refused.
 6. **Network errors and `5xx`:** keep everything pending and try again on the next trigger.
 7. **Triggers:** page load or app launch; returning to the foreground (`visibilitychange` /
-   `scenePhase == .active`); coming back online; a few seconds after each recorded check (debounced);
-   and a "Sync now" button. Don't run two syncs at once.
-8. **Signing out:** the web posts to `/account/logout`, the app sends `DELETE /api/token`. Then remove
-   the sync state. Local history stays on the device. The web clears it on the signed-out page
-   (`/account?notice=signed-out`, via `/static/signout.js`), so any sign-out path, including ending
-   this browser's own session from the device list, leaves no state behind.
-9. **No progress is an error.** If another round is wanted (`more`, or entries still pending) but the
-   last one removed nothing from the queues, pulled no record or tombstone and did not move the
+   `scenePhase == .active`); coming back online; a few seconds after each recorded check
+   (debounced); and a "Sync now" button. Don't run two syncs at once.
+8. **Signing out:** the web posts to `/account/logout`, the app sends `DELETE /api/token`. Then
+   remove the sync state. Local history stays on the device. The web clears it on the signed-out
+   page (`/account?notice=signed-out`, via `/static/signout.js`), so any sign-out path, including
+   ending this browser's own session from the device list, leaves no state behind.
+9. **No progress is an error.** If another round is wanted (`more`, or entries still pending) but
+   the last one removed nothing from the queues, pulled no record or tombstone and did not move the
    cursor, stop and report an error instead of repeating the request.
 
 ## What is not synced

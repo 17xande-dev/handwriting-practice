@@ -1,6 +1,6 @@
 // Stroke models: the built-in files (`/static/strokes/<modelId>.json`, from the iPad app's
 // strokes/), what a font's characters have (status and coverage, for the Stroke models page), and
-// the id definitions are filed under. See the iPad repo's docs/strokes.md. The person's own
+// the id definitions are filed under. See the iPad app's strokes contract. The person's own
 // definitions are in stroke-defs.ts; `chainLookups` puts them first.
 
 import {
@@ -105,7 +105,7 @@ export function strokesFontID(model: string, family: string): string {
   return "custom-" + s.slice(0, 32);
 }
 
-// ---- what a font has (docs/strokes.md, "Define strokes and the user store") ------------------
+// ---- what a font has (the strokes contract, "Define strokes and the user store") ------------------
 
 export type GlyphStatus =
   | "user"

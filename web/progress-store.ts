@@ -41,7 +41,7 @@ export interface CheckRecord {
   letters: Array<{ char: string; score: number; missing: boolean }>;
   metrics: { slantDiff: number; size: number; width: number; baseline: number };
   /**
-   * M5 extras (the iPad repo's docs/metrics.md). Optional members are omitted
+   * M5 extras (the iPad app's metrics contract). Optional members are omitted
    * when absent; every number may be null (NaN) or missing. A reader treats a
    * malformed value as absent; this store carries both untouched.
    */
@@ -100,7 +100,7 @@ export interface Metrics2 {
   >;
   scores?: { shape?: number; consistency?: number; pen?: number; fluency?: number; order?: number };
   notes?: string[];
-  /** Stroke order and direction (iPad docs/strokes.md, "Record"); omitted when no letter was judged. */
+  /** Stroke order and direction (the iPad app's strokes contract, "Record"); omitted when no letter was judged. */
   order?: {
     judged?: number;
     matched?: number;
@@ -147,7 +147,7 @@ export interface InkRecord {
 }
 
 /**
- * A person's stroke definitions for one font (iPad docs/strokes.md, "Sync"): `strokes-<fontId>`, or
+ * A person's stroke definitions for one font (the iPad app's strokes contract, "Sync"): `strokes-<fontId>`, or
  * `strokes-<fontId>~<n>` when split. Edited on the /strokes page (stroke-defs.ts) and synced as it came; unlike the other kinds
  * it is edited in place, so the greater `ts` wins (`newerRecords`).
  */

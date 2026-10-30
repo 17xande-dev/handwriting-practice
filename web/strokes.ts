@@ -2,7 +2,7 @@
 // definition, built-in verified or not, missing) and coverage, and an editor where the strokes of a
 // letter are written with the pen or mouse and snapped to the glyph's centreline. Definitions are
 // kept on this device and synced as `strokes` records, in the iPad's JSON shape, so both use them
-// (iPad docs/strokes.md, "Define strokes and the user store").
+// (the iPad app's strokes contract, "Define strokes and the user store").
 //
 // TODO: suggestions from similar fonts (the iPad's StrokeSuggest: ranking fonts by topology, slant
 // and x-height, transferring a similar font's strokes onto this font's skeleton, with a confidence)

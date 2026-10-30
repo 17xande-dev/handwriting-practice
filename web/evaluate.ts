@@ -76,7 +76,7 @@ export interface CheckResult {
   frame: { uMin: number; vTop: number; tan: number };
   /** Where each model character starts in analysis columns, matched to the writing (one more than characters). */
   userBounds: number[];
-  /** What the metrics (metrics.ts) need, computed in the same pass (see the iPad repo's docs/metrics.md). */
+  /** What the metrics (metrics.ts) need, computed in the same pass (see the iPad app's metrics contract). */
   detail: CheckDetail;
 }
 

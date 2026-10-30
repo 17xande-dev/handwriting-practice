@@ -1,7 +1,7 @@
 // The `ink` record: one checked attempt's strokes, packed small enough for the
 // sync server's 64 KB record limit. A port of the iPad app's InkCodec.swift;
 // the byte layout, quantisation and decimation are specified in its
-// docs/metrics.md ("Ink record") and pinned by testdata/metrics/ink*.json.
+// the metrics contract ("Ink record") and pinned by testdata/metrics/ink*.json.
 // Strokes are in x-height units; the record keeps them as 10 bytes per point.
 
 import type { Pen, Point, Stroke } from "./ink.ts";

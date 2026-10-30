@@ -1,5 +1,5 @@
 // Stroke order and direction (M10): did the writer make each letter's strokes the way the model
-// strokes say? A port of the iPad app's StrokeOrder.swift, to the contract of its docs/strokes.md,
+// strokes say? A port of the iPad app's StrokeOrder.swift, to the iPad app's strokes contract,
 // pinned by the golden vectors in testdata/strokes (stroke-order_test.ts). Works inside the letter
 // spans the DTW alignment already gave.
 //
@@ -17,7 +17,7 @@ import type { Stroke } from "./ink.ts";
 import { letterIndexAt } from "./metrics.ts";
 import { piecewise, S } from "./evaluate.ts";
 
-// ---- stroke model types (docs/strokes.md, "(a) Stroke model file") ---------------------------
+// ---- stroke model types (the strokes contract, "(a) Stroke model file") ---------------------------
 
 export type StrokeKind = "main" | "dot" | "cross";
 export type StrokeOrigin = "table" | "font" | "user" | "transfer";
@@ -798,7 +798,7 @@ function strokeExtent(g: StrokeGlyph): [number, number] | null {
 
 /**
  * The writer's pieces per model character index, each in that letter's frame (x-heights from the
- * letter's origin in the model, upright, baseline 0). See docs/strokes.md, "Runs".
+ * letter's origin in the model, upright, baseline 0). See the strokes contract, "Runs".
  */
 export function letterPiecesInModelFrame(
   strokes: Stroke[],
@@ -1071,7 +1071,7 @@ export function orderMetrics(
   return { letters: out, score: Math.round((100 * sum) / total), notes: orderNotes(out) };
 }
 
-// ---- the record (docs/strokes.md, "(d) Record") ----------------------------------------------
+// ---- the record (the strokes contract, "(d) Record") ----------------------------------------------
 
 /** The `order` member of `metrics2`: counts and the per-letter credit (4 decimals). */
 export function orderRecord(m: OrderMetrics): Record<string, unknown> {

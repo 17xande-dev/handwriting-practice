@@ -1,7 +1,7 @@
 // M5 metrics, part 1: shared helpers, shape detail and consistency. Everything
 // here is a pure function of the strokes and of a `CheckResult` (its `detail`,
 // `userBounds`, `frame`, `letters`). A port of the iPad app's Metrics.swift; the
-// contract, units and NaN rules are its docs/metrics.md, pinned by the golden
+// contract, units and NaN rules are its metrics contract, pinned by the golden
 // vectors in testdata/metrics. Pen control and fluency are in pen-metrics.ts,
 // scores and notes in metric-scores.ts.
 

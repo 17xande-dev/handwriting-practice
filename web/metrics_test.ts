@@ -1,6 +1,6 @@
 /// <reference lib="deno.ns" />
 
-// The golden vectors of the iPad app's docs/metrics.md (copied to
+// The golden vectors of the iPad app's metrics contract (copied to
 // testdata/metrics, made by its Swift core): every metric, sub-score, note and
 // ink record must come out the same here. Numbers match within 1e-6 relative to
 // max(1, |x|) (ink: 1e-9); strings, integers, booleans and nulls exactly.

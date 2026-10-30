@@ -1,6 +1,6 @@
 /// <reference lib="deno.ns" />
 
-// The pens' maths against values worked out by hand from the iPad repo's docs/pens.md (the
+// The pens' maths against values worked out by hand from the iPad app's pens contract (the
 // formulas, not this code): the pressure curve, the pointed nib's smoothing and taper, the
 // pencil's footprint and stamps, and the grain hash.
 

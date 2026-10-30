@@ -1,4 +1,4 @@
-// Ink renderers, exact to the iPad app's (docs/pens.md there; the maths is in pens.ts):
+// Ink renderers, exact to the iPad app's (the pens contract there; the maths is in pens.ts):
 //
 //  - monoline: a round pen whose width follows (calibrated) pressure, which is how basic
 //    Getty-Dubay italic is written (pencil or fine-tip pen);

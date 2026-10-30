@@ -1,4 +1,4 @@
-// The teaching aids of M10 (iPad docs/strokes.md, "Teaching aids"), as pure geometry: where each model
+// The teaching aids of M10 (the iPad app's strokes contract, "Teaching aids"), as pure geometry: where each model
 // letter's strokes sit on a model line, the timeline of an animated stroke-order demo, the progress of
 // "trace first" through a line's strokes. None of this judges anything: the rules are in
 // stroke-order.ts, and stroke-aids-view.ts draws what is computed here.

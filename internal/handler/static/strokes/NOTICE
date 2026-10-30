@@ -20,7 +20,7 @@ strokes/briem-print.json  (model "briem-print")
 
 The same two lines are the `copyright` member, and "SIL Open Font License 1.1" the `licence` member, of each
 JSON file's header. The files' glyphs, strokes and confidences are produced by the pipeline of
-docs/strokes.md; the order and direction of the strokes come from the ductus table of
+the strokes contract; the order and direction of the strokes come from the ductus table of
 HandwritingCore/Sources/HandwritingCore/Ductus.swift, written for this project.
 
 -----------------------------------------------------------
