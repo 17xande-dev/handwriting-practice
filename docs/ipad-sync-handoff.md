@@ -68,8 +68,7 @@ sync state and profiles follow the design of the owner's other practice app.
   records).
 - **Favourite fonts (`prefs` record).** One mutable record, `id` `"prefs-favourites"`, shape and
   rules in `sync-api.md` (`### prefs`): `favourites` is an ordered array of
-  `{id, kind: "builtin"|"google"|"custom",
-  family, variant?}`; builtin ids are the FontCatalog
+  `{id, kind: "builtin"|"google"|"custom", family, variant?}`; builtin ids are the FontCatalog
   ids, Google and custom ones are `"google:<family>"`. Treat it like `strokes`: every edit sets `ts`
   to now (above the old one) and queues the record; a pulled record replaces the local one only if
   its `ts` is greater; keep unknown members and fields in place when writing it back; a pulled
