@@ -1,4 +1,4 @@
-.PHONY: deploy run bundle build test vet fmt check up down fonts-fetch fixtures glyphs
+.PHONY: deploy run bundle build test vet fmt check vulncheck vulncheck-install up down fonts-fetch fixtures glyphs
 
 ADDR ?= :8083
 DB_PATH ?= $(HOME)/.local/share/handwriting/handwriting.db
@@ -36,6 +36,18 @@ fmt:
 	gofmt -w .
 	deno fmt -q
 
+# govulncheck is pinned here rather than in go.mod: it is a build-time tool and
+# would drag its dependencies into go.mod. v1.1.x crashes on Go 1.27.
+GOVULNCHECK_VERSION ?= v1.9.0
+
+## vulncheck-install: install the pinned govulncheck
+vulncheck-install:
+	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+
+## vulncheck: fail if a reachable known vulnerability affects the build
+vulncheck:
+	govulncheck ./...
+
 ## check: the gate before every commit. Fails if app.js is stale against web/.
 check:
 	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo "gofmt needed"; exit 1; }
@@ -47,7 +59,9 @@ check:
 	@tmp=$$(mktemp -d) && cp internal/handler/static/*.js $$tmp/ && deno task -q bundle >/dev/null 2>&1; \
 	  s=0; for f in $$tmp/*.js; do cmp -s $$f internal/handler/static/$$(basename $$f) || s=1; done; rm -rf $$tmp; \
 	  [ $$s -eq 0 ] || { echo "a bundle was stale against web/; rebundled it, commit the result"; exit 1; }
-	go test -count=1 ./...
+	go test -count=1 -race ./...
+	@command -v govulncheck >/dev/null || { echo "govulncheck is missing: make vulncheck-install"; exit 1; }
+	govulncheck ./...
 
 DEPLOY_HOST ?= ubuntu@192.168.0.29
 
