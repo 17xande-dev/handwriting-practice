@@ -91,3 +91,60 @@ func TestIPKey(t *testing.T) {
 		t.Error("unparsable address not passed through")
 	}
 }
+
+// A proxy that writes "ip:port" or "[v6]:port" still names a client.
+func TestClientIPHeaderWithPort(t *testing.T) {
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "10.0.0.1:5555"
+	for header, want := range map[string]string{
+		"203.0.113.9:4711":   "203.0.113.9",
+		"[2001:db8::1]:4711": "2001:db8::1",
+		"[2001:db8::1]":      "2001:db8::1",
+		"2001:db8::1":        "2001:db8::1",
+		"203.0.113.9":        "203.0.113.9",
+		"not-an-ip:80":       "10.0.0.1",
+		"":                   "10.0.0.1",
+	} {
+		r.Header.Set("CF-Connecting-IP", header)
+		if got := ClientIP("CF-Connecting-IP")(r); got != want {
+			t.Errorf("header %q: %s, want %s", header, got, want)
+		}
+	}
+	r.Header.Set("X-Forwarded-For", "198.51.100.2, 192.0.2.7:9000")
+	if got := ClientIP("X-Forwarded-For")(r); got != "192.0.2.7" {
+		t.Errorf("rightmost with a port: %s", got)
+	}
+}
+
+// Past the cap a new key is refused (failing closed), keys already held keep
+// their allowance, and the cap heals once buckets go idle.
+func TestLimiterCapFailsClosed(t *testing.T) {
+	l := NewLimiter(2, time.Minute)
+	l.max = 5
+	now := time.Unix(0, 0)
+	l.now = func() time.Time { return now }
+	for i := range 5 {
+		if !l.Allow(fmt.Sprint(i)) {
+			t.Fatalf("key %d refused below the cap", i)
+		}
+	}
+	if l.Allow("new") {
+		t.Fatal("a new key was allowed at the cap")
+	}
+	if l.Len() != 5 {
+		t.Fatalf("%d buckets, want the cap of 5", l.Len())
+	}
+	if !l.Allow("0") {
+		t.Fatal("a held key was refused at the cap")
+	}
+	// Buckets still live a second later: the capped sweep frees nothing.
+	now = now.Add(capSweepEvery)
+	if l.Allow("new") {
+		t.Fatal("a new key was allowed while every bucket is live")
+	}
+	// Idle past the refill time, the sweep makes room.
+	now = now.Add(time.Hour)
+	if !l.Allow("new") {
+		t.Fatal("the cap did not heal after the buckets went idle")
+	}
+}

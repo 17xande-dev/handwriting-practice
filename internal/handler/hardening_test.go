@@ -297,3 +297,16 @@ func TestFixtureCodeIsNotInTheProductionBundle(t *testing.T) {
 		t.Error("debug.js lacks the fixture builder")
 	}
 }
+
+// A request the per-IP limit refused must not also create an email bucket, or
+// one address spraying fresh emails would fill the email limiter's map.
+func TestRefusedByIPLeavesNoEmailBucket(t *testing.T) {
+	s := newAccountServer(t)
+	for i := range 40 {
+		s.do(t, "POST", "/account/login", url.Values{"email": {fmt.Sprintf("u%d@x.com", i)}, "password": {"wrong password!!"}}, "")
+	}
+	// The IP bucket holds a burst of 10 (a refill or so may slip in).
+	if n := s.srv.limits.loginEmail.Len(); n > 12 {
+		t.Errorf("the email limiter holds %d buckets after 40 attempts from one address, want about 10", n)
+	}
+}

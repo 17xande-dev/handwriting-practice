@@ -216,12 +216,17 @@ var errBadCredentials = errors.New("bad credentials")
 // allowLogin applies both sign-in limits to an already normalised email. The
 // tight one is keyed on the email's hash, which an attacker cannot shed the
 // way they can a cookie; the looser per-IP ceiling (an IPv6 client counts by
-// its /64) stops one address spraying many emails. A refusal is logged.
+// its /64) stops one address spraying many emails. A request the IP limit
+// refused never reaches the email limit: it would otherwise leave a bucket
+// per fresh email for as long as buckets live. A refusal is logged.
 func (s *Server) allowLogin(r *http.Request, email string) bool {
 	ip := s.clientIP(r)
 	ipOK := s.limits.loginIP.Allow(middleware.IPKey(ip))
-	h := sha256.Sum256([]byte(email))
-	emailOK := s.limits.loginEmail.Allow(string(h[:]))
+	emailOK := true
+	if ipOK {
+		h := sha256.Sum256([]byte(email))
+		emailOK = s.limits.loginEmail.Allow(string(h[:]))
+	}
 	if !ipOK || !emailOK {
 		s.log.Warn("sign-in rate limited", "email", emailTag(email), "ip", ip, "path", r.URL.Path,
 			"by_ip", !ipOK, "by_email", !emailOK)

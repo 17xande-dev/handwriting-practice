@@ -105,9 +105,13 @@ func run(log *slog.Logger) error {
 		Addr:              cfg.Addr,
 		Handler:           middleware.Chain(h, middleware.Logging(log)),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// The default is 1 MB per request, and the client address for the rate
+		// limiters can come from a header. Nothing this app sends or sets
+		// comes near 64 KiB.
+		MaxHeaderBytes: 64 << 10,
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   30 * time.Second,
+		IdleTimeout:    120 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
