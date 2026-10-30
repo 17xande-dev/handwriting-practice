@@ -28,6 +28,6 @@
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.19",
-    "chart.js": "npm:chart.js@4.5.1"
+    "chart.js": "npm:chart.js@4.6.1"
   }
 }

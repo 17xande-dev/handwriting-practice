@@ -24,7 +24,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -trimpath \
 # what makes the volume writable without running as root.
 RUN mkdir -p /out/data
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/calligraphy /calligraphy
 COPY --from=build --chown=65532:65532 /out/data /data
 USER nonroot:nonroot
