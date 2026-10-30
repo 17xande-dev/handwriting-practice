@@ -3,8 +3,10 @@ package account
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"calligraphy/internal/dbtest"
 )
@@ -201,5 +203,19 @@ func TestDeleteCascades(t *testing.T) {
 	}
 	if _, _, err := s.Authenticate(ctx, tok); !errors.Is(err, ErrNotFound) {
 		t.Error("deleted user's token still works")
+	}
+}
+
+// A device label is cut at 100 characters, never inside a multi-byte rune.
+func TestSessionLabelTruncatesByRunes(t *testing.T) {
+	s := newStore(t)
+	u := mustCreate(t, s, "a@x.com", false)
+	label := strings.Repeat("é", 150) // two bytes each
+	_, sess, err := s.CreateSession(ctx, u.ID, KindDevice, label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strings.Repeat("é", 100); sess.Label != want || !utf8.ValidString(sess.Label) {
+		t.Errorf("label has %d runes, valid=%v; want 100 whole runes", utf8.RuneCountInString(sess.Label), utf8.ValidString(sess.Label))
 	}
 }

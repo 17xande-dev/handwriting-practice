@@ -45,8 +45,9 @@ func (s *Store) CreateSession(ctx context.Context, userID int64, kind, label str
 	if kind == KindWeb {
 		expires = now.Add(WebSessionTTL)
 	}
-	if len(label) > 100 {
-		label = label[:100]
+	// 100 characters, not bytes: a byte cut can split a UTF-8 rune.
+	if r := []rune(label); len(r) > 100 {
+		label = string(r[:100])
 	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO auth_sessions
 		(token_hash, user_id, kind, label, created_at, last_used_at, expires_at)
