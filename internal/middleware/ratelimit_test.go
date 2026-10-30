@@ -87,6 +87,10 @@ func TestIPKey(t *testing.T) {
 	if IPKey("203.0.113.9") != "203.0.113.9" || IPKey("::ffff:203.0.113.9") != "203.0.113.9" {
 		t.Error("IPv4 keys changed")
 	}
+	// A zone is not part of the client: fe80::1%eth0 and %eth1 are one bucket.
+	if IPKey("fe80::1%eth0") != IPKey("fe80::1%eth1") || IPKey("fe80::1%eth0") != IPKey("fe80::2") {
+		t.Error("a zoned address is keyed apart from its /64")
+	}
 	if IPKey("garbage") != "garbage" {
 		t.Error("unparsable address not passed through")
 	}

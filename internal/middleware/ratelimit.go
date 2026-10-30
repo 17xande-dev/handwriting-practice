@@ -170,7 +170,10 @@ func unbracket(ip string) string {
 // whole /64 (any one subscriber can pick addresses freely within it), so the
 // /64 is one bucket; an IPv4 address is its own.
 func IPKey(ip string) string {
-	a := net.ParseIP(ip)
+	// Drop any zone: fe80::1%eth0 and fe80::1%eth1 are one client to us, and
+	// net.ParseIP rejects a zoned address outright.
+	bare, _, _ := strings.Cut(ip, "%")
+	a := net.ParseIP(bare)
 	if a == nil {
 		return ip
 	}
