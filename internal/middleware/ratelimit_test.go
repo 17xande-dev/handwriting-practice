@@ -137,7 +137,7 @@ func TestLimiterCapFailsClosed(t *testing.T) {
 	if !l.Allow("0") {
 		t.Fatal("a held key was refused at the cap")
 	}
-	// Buckets still live a second later: the capped sweep frees nothing.
+	// Buckets still live capSweepEvery later: the capped sweep frees nothing.
 	now = now.Add(capSweepEvery)
 	if l.Allow("new") {
 		t.Fatal("a new key was allowed while every bucket is live")
@@ -146,5 +146,35 @@ func TestLimiterCapFailsClosed(t *testing.T) {
 	now = now.Add(time.Hour)
 	if !l.Allow("new") {
 		t.Fatal("the cap did not heal after the buckets went idle")
+	}
+}
+
+// Each sweep scans the whole map under the lock, so a flood of newcomers must
+// not trigger one apiece.
+func TestLimiterCapSweepIsRateLimited(t *testing.T) {
+	l := NewLimiter(1, 10*time.Second) // buckets idle out after 10s
+	l.max = 2
+	now := time.Unix(100, 0)
+	l.now = func() time.Time { return now }
+	l.Allow("a")
+	l.Allow("b")
+
+	now = time.Unix(108, 0)
+	if l.Allow("new") { // cap-time sweep: nothing idle yet
+		t.Fatal("admitted while full")
+	}
+	// Both buckets went idle at 110, but the last cap-time sweep was 3s ago, so
+	// the newcomer is refused without a scan and nothing is reclaimed.
+	now = time.Unix(111, 0)
+	if l.Allow("new") {
+		t.Error("a refused newcomer triggered a second sweep inside capSweepEvery")
+	}
+	if l.Len() != 2 {
+		t.Errorf("%d buckets, want 2 (no rescan yet)", l.Len())
+	}
+	// Once the interval has passed the sweep runs and the cap heals.
+	now = time.Unix(108, 0).Add(capSweepEvery + time.Second)
+	if !l.Allow("new") {
+		t.Error("the cap did not heal once capSweepEvery had passed")
 	}
 }
