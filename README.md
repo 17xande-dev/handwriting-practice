@@ -381,9 +381,9 @@ Operating production (run from this repo; `kamal` as above). Only the
 from Kamal's and the image's behaviour and **untested**:
 
 ```sh
-# First admin, or a lockout reset. --reuse execs in the running container,
-# which keeps its env (DB_PATH). Without it Kamal starts a fresh container,
-# and the image's ENTRYPOINT (/calligraphy) would be prefixed to the command.
+# First admin, or a lockout reset. --reuse execs in the running container.
+# Without it Kamal starts a fresh container, and the image's ENTRYPOINT
+# (/calligraphy) would be prefixed to the command, starting a second server.
 kamal app exec -i --reuse "/calligraphy -add-admin you@example.com"
 kamal app exec -i --reuse "/calligraphy -reset-password you@example.com"
 
@@ -397,7 +397,10 @@ docker run --rm -v handwriting_data:/data -v "$PWD":/out busybox cp /data/backup
 docker run --rm -v handwriting_data:/data busybox ls -l /data/backups
 
 # Restore: stop the app, put the copy in place, start it again. The files must
-# end up owned by uid 65532 (the nonroot user the app runs as).
+# end up owned by uid 65532 (the nonroot user the app runs as). `kamal` lines
+# run from this repo on your laptop; the `docker run` line runs ON home-docker
+# (ssh ubuntu@home-docker), where the volume lives. It overwrites the live
+# database, so take a copy first (the backup commands above).
 kamal app stop
 docker run --rm -v handwriting_data:/data -v "$PWD":/in busybox \
   sh -c 'cp /in/<file>.db /data/handwriting.db && rm -f /data/handwriting.db-wal /data/handwriting.db-shm && chown 65532:65532 /data/handwriting.db'
