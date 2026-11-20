@@ -20,7 +20,7 @@ import (
 
 func addAdmin(ctx context.Context, store *account.Store, email string, out io.Writer) error {
 	pw := auth.GeneratePassword()
-	hash, err := auth.HashPassword(pw)
+	hash, err := auth.HashPassword(ctx, pw)
 	if err != nil {
 		return err
 	}
@@ -38,7 +38,7 @@ func resetPassword(ctx context.Context, store *account.Store, email string, out 
 		return fmt.Errorf("%s: %w", email, err)
 	}
 	pw := auth.GeneratePassword()
-	hash, err := auth.HashPassword(pw)
+	hash, err := auth.HashPassword(ctx, pw)
 	if err != nil {
 		return err
 	}

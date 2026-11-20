@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -235,9 +236,9 @@ func (s *Server) allowLogin(r *http.Request, email string) bool {
 }
 
 // checkPassword is the one place a sign-in is decided, shared by the web
-// form and the app's token endpoint. Every failure costs one argon2 verify
-// and returns errBadCredentials, whatever the cause. email is normalised.
-func (s *Server) checkPassword(r *http.Request, email, password string) (account.User, error) {
+// form and the app's token endpoint. Wrong passwords and unknown emails
+// each spend one check for inputs within policy. email is normalised.
+func (s *Server) checkPassword(r *http.Request, email, pw string) (account.User, error) {
 	bad := func(why string) (account.User, error) {
 		// Never the password or the email itself; the why is for the operator
 		// only, the client sees one message.
@@ -246,7 +247,7 @@ func (s *Server) checkPassword(r *http.Request, email, password string) (account
 	}
 	u, err := s.accounts.ByEmail(r.Context(), email)
 	if errors.Is(err, account.ErrNotFound) {
-		if err := auth.SpendVerifyTime(password); err != nil {
+		if err := auth.SpendVerifyTime(r.Context(), pw); err != nil {
 			return account.User{}, err
 		}
 		return bad("unknown email")
@@ -254,9 +255,12 @@ func (s *Server) checkPassword(r *http.Request, email, password string) (account
 	if err != nil {
 		return account.User{}, err
 	}
-	ok, err := auth.VerifyPassword(password, u.PasswordHash)
+	ok, err := auth.VerifyPassword(r.Context(), pw, u.PasswordHash)
 	if err != nil {
-		return account.User{}, err
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return account.User{}, err
+		}
+		return bad("invalid stored password hash")
 	}
 	// Disabled is checked after the password, so a disabled account answers
 	// exactly as a wrong password does.
@@ -310,7 +314,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, u accoun
 		back("rate-limited")
 		return
 	}
-	ok, err := auth.VerifyPassword(r.PostFormValue("current"), u.PasswordHash)
+	ok, err := auth.VerifyPassword(r.Context(), r.PostFormValue("current"), u.PasswordHash)
 	if err != nil {
 		s.serverError(w, err)
 		return
@@ -333,7 +337,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, u accoun
 		back("password-long")
 		return
 	}
-	hash, err := auth.HashPassword(pw)
+	hash, err := auth.HashPassword(r.Context(), pw)
 	if err != nil {
 		s.serverError(w, err)
 		return

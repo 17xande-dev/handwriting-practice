@@ -30,7 +30,7 @@ func TestAddAdminPrintsAWorkingPassword(t *testing.T) {
 	if err != nil || !u.IsAdmin {
 		t.Fatalf("admin not created: %+v %v", u, err)
 	}
-	if ok, _ := auth.VerifyPassword(m[1], u.PasswordHash); !ok {
+	if ok, _ := auth.VerifyPassword(t.Context(), m[1], u.PasswordHash); !ok {
 		t.Error("printed password does not verify")
 	}
 	if err := addAdmin(ctx, store, "boss@example.com", &out); err == nil {
@@ -48,7 +48,7 @@ func TestResetPasswordReplacesIt(t *testing.T) {
 	}
 	pw := printedPassword.FindStringSubmatch(out.String())[1]
 	u, _ := store.ByEmail(ctx, "a@x.com")
-	if ok, _ := auth.VerifyPassword(pw, u.PasswordHash); !ok {
+	if ok, _ := auth.VerifyPassword(t.Context(), pw, u.PasswordHash); !ok {
 		t.Error("reset password does not verify")
 	}
 	if err := resetPassword(ctx, store, "nobody@x.com", &out); err == nil {

@@ -219,6 +219,23 @@ func TestTokenSignIn(t *testing.T) {
 	}
 }
 
+func TestMalformedHashTokenSignInIsGenericAndRateLimited(t *testing.T) {
+	s := newAccountServer(t)
+	if _, err := s.accounts.Create(t.Context(), "broken@x.com", "invalid hash", false); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"email":"broken@x.com","password":"a long enough password"}`
+	for range 5 {
+		rec := s.api(t, "POST", "/api/token", body, "", "")
+		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), loginFailed) {
+			t.Fatalf("malformed hash: %d %s", rec.Code, rec.Body)
+		}
+	}
+	if rec := s.api(t, "POST", "/api/token", body, "", ""); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("malformed-hash attempts must count toward the rate limit: %d", rec.Code)
+	}
+}
+
 // Signing the app out kills its token, and the device shows on the account
 // page until then, labelled as the app named it.
 func TestTokenSignOut(t *testing.T) {

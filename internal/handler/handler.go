@@ -4,6 +4,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"errors"
 	"fmt"
@@ -15,11 +16,12 @@ import (
 	"time"
 
 	"calligraphy/internal/account"
-	"calligraphy/internal/auth"
 	"calligraphy/internal/fonts"
 	"calligraphy/internal/history"
 	"calligraphy/internal/middleware"
 	"calligraphy/internal/sheets"
+
+	"github.com/17xande-dev/password"
 )
 
 //go:embed templates
@@ -251,12 +253,17 @@ func (s *Server) renderData(w http.ResponseWriter, status int, file, title strin
 }
 
 func (s *Server) serverError(w http.ResponseWriter, err error) {
-	if errors.Is(err, auth.ErrBusy) {
+	if passwordBusy(err) {
 		busy(w)
 		return
 	}
 	s.log.Error("render", "err", err)
 	http.Error(w, "internal server error", http.StatusInternalServerError)
+}
+
+func passwordBusy(err error) bool {
+	// The module also reports ErrBusy when a client cancels the request.
+	return errors.Is(err, password.ErrBusy) && errors.Is(err, context.DeadlineExceeded)
 }
 
 // busy answers a request that could not get an argon2 slot: 503 with a

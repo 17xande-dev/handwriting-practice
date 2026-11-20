@@ -127,7 +127,7 @@ func TestAdminResetPassword(t *testing.T) {
 		t.Fatalf("no password shown: %d", rec.Code)
 	}
 	got, _ := s.accounts.ByID(t.Context(), u.ID)
-	if ok, _ := auth.VerifyPassword(m[1], got.PasswordHash); !ok {
+	if ok, _ := auth.VerifyPassword(t.Context(), m[1], got.PasswordHash); !ok {
 		t.Error("shown password does not verify")
 	}
 	if !strings.Contains(s.do(t, "GET", "/account", nil, userCookie).Body.String(), `action="/account/login"`) {

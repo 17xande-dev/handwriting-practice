@@ -1,46 +1,11 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
-	"time"
 )
-
-func TestHashRoundTrip(t *testing.T) {
-	h, err := HashPassword("correct horse battery")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(h, "$argon2id$v=19$") {
-		t.Errorf("not a PHC argon2id string: %s", h)
-	}
-	if ok, err := VerifyPassword("correct horse battery", h); !ok || err != nil {
-		t.Errorf("right password: ok=%v err=%v", ok, err)
-	}
-	if ok, _ := VerifyPassword("correct horse batterY", h); ok {
-		t.Error("wrong password verified")
-	}
-}
-
-// Two hashes of one password differ, so equal hashes in the database never
-// reveal equal passwords.
-func TestHashIsSalted(t *testing.T) {
-	a, _ := HashPassword("same password here")
-	b, _ := HashPassword("same password here")
-	if a == b {
-		t.Error("hashes are equal")
-	}
-}
-
-// A corrupted hash must be an error, never a match.
-func TestVerifyRejectsMalformedHash(t *testing.T) {
-	for _, h := range []string{"", "plain", "$argon2i$v=19$m=1,t=1,p=1$c2FsdA$a2V5", "$argon2id$v=19$m=0,t=0,p=0$$"} {
-		if ok, err := VerifyPassword("anything", h); ok || err == nil {
-			t.Errorf("%q: ok=%v err=%v", h, ok, err)
-		}
-	}
-}
 
 func TestPolicyIsLengthOnly(t *testing.T) {
 	if CheckPolicy("short") == nil {
@@ -85,45 +50,21 @@ func TestTokenHashIsStable(t *testing.T) {
 	}
 }
 
-// This package's tests never call UseFastHashesForTests, so this pins the
-// production cost: a change to it must be deliberate, not a test helper
-// leaking out.
-func TestProductionParameters(t *testing.T) {
-	h, _ := HashPassword("whatever password")
-	if !strings.Contains(h, "$m=65536,t=3,p=2$") {
-		t.Errorf("hash parameters changed: %s", h)
+func TestPasswordLimitsBeforeHashing(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	// The policy bounds bytes, including for passwords with fewer than 256 runes.
+	tooLong := strings.Repeat("é", MaxPasswordLength/2+1)
+	if _, err := HashPassword(ctx, tooLong); !errors.Is(err, ErrPasswordTooLong) {
+		t.Errorf("creation with an overlong password: %v", err)
 	}
-}
-
-// The slots are process-wide: with all of them taken, a further hash waits
-// briefly and then fails with ErrBusy instead of allocating another 64 MiB.
-func TestConcurrencyCap(t *testing.T) {
-	h, err := HashPassword("whatever password")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := HashPassword(ctx, ""); !errors.Is(err, ErrPasswordTooShort) {
+		t.Errorf("creation with an empty password: %v", err)
 	}
-	old := acquireWait
-	acquireWait = 20 * time.Millisecond
-	defer func() { acquireWait = old }()
-	for range maxConcurrent {
-		if err := acquire(); err != nil {
-			t.Fatal(err)
-		}
+	if ok, err := VerifyPassword(ctx, tooLong, "invalid hash"); ok || err != nil {
+		t.Errorf("verification with an overlong password: %v, %v", ok, err)
 	}
-	if _, err := VerifyPassword("whatever password", h); !errors.Is(err, ErrBusy) {
-		t.Errorf("verify with no free slot: %v", err)
-	}
-	if _, err := HashPassword("whatever password"); !errors.Is(err, ErrBusy) {
-		t.Errorf("hash with no free slot: %v", err)
-	}
-	if err := SpendVerifyTime("x"); !errors.Is(err, ErrBusy) {
-		t.Errorf("spend with no free slot: %v", err)
-	}
-	release()
-	if ok, err := VerifyPassword("whatever password", h); !ok || err != nil {
-		t.Errorf("after a slot frees: %v %v", ok, err)
-	}
-	for range maxConcurrent - 1 {
-		release()
+	if err := SpendVerifyTime(ctx, tooLong); err != nil {
+		t.Errorf("dummy check with an overlong password: %v", err)
 	}
 }

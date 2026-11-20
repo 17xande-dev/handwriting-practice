@@ -3,17 +3,13 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
-	"crypto/subtle"
-	"encoding/base64"
-	"errors"
 	"fmt"
-	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
-	"golang.org/x/crypto/argon2"
+	"github.com/17xande-dev/password"
 )
 
 // MinPasswordLength is the whole password policy. Composition rules push
@@ -21,61 +17,8 @@ import (
 // makes guessing expensive.
 const MinPasswordLength = 12
 
-// MaxPasswordLength bounds the work one request can ask argon2 to hash.
+// MaxPasswordLength bounds the bytes one request can ask argon2 to hash.
 const MaxPasswordLength = 256
-
-// argon2id parameters. 64 MiB and three passes cost roughly 100ms here, a
-// price paid once per sign-in; every endpoint that verifies a password is
-// rate-limited because each call also holds that 64 MiB. The parameters are
-// written into each hash, so verifying always uses the hash's own.
-var params = struct {
-	time, memory uint32
-	threads      uint8
-}{time: 3, memory: 64 * 1024, threads: 2}
-
-// maxConcurrent is how many argon2 computations may run at once, process-wide.
-// Each holds 64 MiB, so the cap is what keeps a burst of sign-ins (from many
-// addresses, past every per-IP limit) from exhausting the container's memory.
-const maxConcurrent = 3
-
-// acquireWait is how long a request queues for a slot before giving up.
-var acquireWait = 2 * time.Second
-
-var slots = make(chan struct{}, maxConcurrent)
-
-// ErrBusy means every argon2 slot stayed taken for acquireWait: answer 503
-// with Retry-After rather than pile more memory on.
-var ErrBusy = errors.New("auth: too many password checks in progress")
-
-func acquire() error {
-	select {
-	case slots <- struct{}{}:
-		return nil
-	default:
-	}
-	t := time.NewTimer(acquireWait)
-	defer t.Stop()
-	select {
-	case slots <- struct{}{}:
-		return nil
-	case <-t.C:
-		return ErrBusy
-	}
-}
-
-func release() { <-slots }
-
-const (
-	argonKeyLen  = 32
-	argonSaltLen = 16
-)
-
-// UseFastHashesForTests drops the cost to the minimum, for test binaries
-// only: a suite that signs in hundreds of times would otherwise spend most
-// of its time, and gigabytes, in argon2.
-func UseFastHashesForTests() {
-	params.time, params.memory, params.threads = 1, 64, 1
-}
 
 var ErrPasswordTooShort = fmt.Errorf("the password must be at least %d characters", MinPasswordLength)
 var ErrPasswordTooLong = fmt.Errorf("the password must be at most %d characters", MaxPasswordLength)
@@ -92,88 +35,38 @@ func CheckPolicy(pw string) error {
 	return nil
 }
 
-// HashPassword returns an argon2id hash in the PHC string format
-// ($argon2id$v=19$m=…,t=…,p=…$salt$key), so the parameters travel with the
-// hash and can be raised later without breaking existing ones.
-func HashPassword(pw string) (string, error) {
-	if err := acquire(); err != nil {
+// HashPassword enforces the app's policy before queuing to hash a new password.
+func HashPassword(ctx context.Context, pw string) (string, error) {
+	if err := CheckPolicy(pw); err != nil {
 		return "", err
 	}
-	defer release()
-	return hashPassword(pw)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return password.Hash(ctx, pw)
 }
 
-func hashPassword(pw string) (string, error) {
-	salt := make([]byte, argonSaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return "", err
-	}
-	key := argon2.IDKey([]byte(pw), salt, params.time, params.memory, params.threads, argonKeyLen)
-	b64 := base64.RawStdEncoding
-	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, params.memory, params.time, params.threads, b64.EncodeToString(salt), b64.EncodeToString(key)), nil
-}
-
-var errBadHash = errors.New("auth: malformed password hash")
-
-// VerifyPassword reports whether pw matches the stored hash. An unparseable
-// hash is an error, never a match.
-func VerifyPassword(pw, hash string) (bool, error) {
+// VerifyPassword reports whether pw matches the stored hash. Existing
+// credentials aren't subject to the new-password minimum length.
+func VerifyPassword(ctx context.Context, pw, hash string) (bool, error) {
 	if len(pw) > MaxPasswordLength {
 		return false, nil
 	}
-	if err := acquire(); err != nil {
-		return false, err
-	}
-	defer release()
-	return verifyPassword(pw, hash)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	// This app does not rewrite hashes at sign-in.
+	ok, _, err := password.Check(ctx, hash, pw)
+	return ok, err
 }
 
-func verifyPassword(pw, hash string) (bool, error) {
-	parts := strings.Split(hash, "$")
-	if len(parts) != 6 || parts[1] != "argon2id" {
-		return false, errBadHash
+// SpendVerifyTime does one dummy check for an unknown email.
+func SpendVerifyTime(ctx context.Context, pw string) error {
+	if len(pw) > MaxPasswordLength {
+		return nil
 	}
-	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argon2.Version {
-		return false, errBadHash
-	}
-	var m, t uint32
-	var p uint8
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &m, &t, &p); err != nil || m == 0 || t == 0 || p == 0 {
-		return false, errBadHash
-	}
-	b64 := base64.RawStdEncoding
-	salt, err := b64.DecodeString(parts[4])
-	if err != nil {
-		return false, errBadHash
-	}
-	want, err := b64.DecodeString(parts[5])
-	if err != nil || len(want) == 0 {
-		return false, errBadHash
-	}
-	got := argon2.IDKey([]byte(pw), salt, t, m, p, uint32(len(want)))
-	return subtle.ConstantTimeCompare(got, want) == 1, nil
-}
-
-// dummyHash is verified against when the email is unknown, so a sign-in
-// for a missing account costs the same as one for a real account: otherwise
-// the response time says which emails have accounts.
-var dummyHash = sync.OnceValue(func() string {
-	h, err := hashPassword("not a real password, only spends time")
-	if err != nil {
-		panic(err)
-	}
-	return h
-})
-
-// SpendVerifyTime does the work of one VerifyPassword and discards it.
-func SpendVerifyTime(pw string) error {
-	_, err := VerifyPassword(pw, dummyHash())
-	if errors.Is(err, ErrBusy) {
-		return err
-	}
-	return nil
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, err := password.CheckDummy(ctx, pw)
+	return err
 }
 
 // passwordAlphabet leaves out characters that read alike (0/O, 1/l/I), since

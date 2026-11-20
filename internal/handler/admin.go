@@ -109,7 +109,7 @@ func (s *Server) adminCreate(w http.ResponseWriter, r *http.Request, me account.
 		s.renderAdminUsers(w, r, me, status, adminUsersPage{Email: email, Admin: admin, Error: msg})
 	}
 	pw := auth.GeneratePassword()
-	hash, err := auth.HashPassword(pw)
+	hash, err := auth.HashPassword(r.Context(), pw)
 	if err != nil {
 		s.serverError(w, err)
 		return
@@ -166,7 +166,7 @@ func (s *Server) adminReset(w http.ResponseWriter, r *http.Request, me account.U
 		return
 	}
 	pw := auth.GeneratePassword()
-	hash, err := auth.HashPassword(pw)
+	hash, err := auth.HashPassword(r.Context(), pw)
 	if err != nil {
 		s.serverError(w, err)
 		return

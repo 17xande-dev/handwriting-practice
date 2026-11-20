@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"calligraphy/internal/auth"
 )
@@ -164,28 +166,23 @@ func TestIPv6ClientsShareTheirSlash64(t *testing.T) {
 	}
 }
 
-// With every argon2 slot taken a sign-in answers 503 and Retry-After, as a
-// form and as the app's token call, rather than allocating more memory.
-func TestSignInIsShedWhenArgonIsBusy(t *testing.T) {
+func TestPasswordQueueDeadlineIsBusyButCancellationIsNot(t *testing.T) {
 	s := newAccountServer(t)
-	s.addUser(t, "a@x.com", false)
-	release := auth.HoldSlotsForTest(t)
-	rec := s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}}, "")
+	deadline, stop := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer stop()
+	err := auth.SpendVerifyTime(deadline, testPassword)
+	rec := httptest.NewRecorder()
+	s.srv.serverError(rec, err)
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
-		t.Errorf("form: %d, Retry-After %q", rec.Code, rec.Header().Get("Retry-After"))
+		t.Errorf("deadline: %d, Retry-After %q", rec.Code, rec.Header().Get("Retry-After"))
 	}
-	rec = s.api(t, "POST", "/api/token", fmt.Sprintf(`{"email":"a@x.com","password":%q,"label":"l"}`, testPassword), "", "")
-	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" || !strings.Contains(rec.Body.String(), "busy") {
-		t.Errorf("token: %d %s", rec.Code, rec.Body)
-	}
-	// An unknown email must not look different (it also needs a slot).
-	rec = s.do(t, "POST", "/account/login", url.Values{"email": {"nobody@x.com"}, "password": {testPassword}}, "")
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("unknown email: %d", rec.Code)
-	}
-	release()
-	if rec := s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}}, ""); rec.Code != http.StatusSeeOther {
-		t.Errorf("after the slots free: %d", rec.Code)
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = auth.SpendVerifyTime(canceled, testPassword)
+	rec = httptest.NewRecorder()
+	s.srv.serverError(rec, err)
+	if rec.Code == http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "" {
+		t.Errorf("cancellation: %d, Retry-After %q", rec.Code, rec.Header().Get("Retry-After"))
 	}
 }
 

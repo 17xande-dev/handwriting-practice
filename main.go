@@ -23,6 +23,8 @@ import (
 	"calligraphy/internal/handler"
 	"calligraphy/internal/history"
 	"calligraphy/internal/middleware"
+
+	"github.com/17xande-dev/password"
 )
 
 func main() {
@@ -31,6 +33,10 @@ func main() {
 	addAdminEmail := flag.String("add-admin", "", "create an admin `EMAIL` with a generated password, print it, and exit")
 	resetEmail := flag.String("reset-password", "", "give `EMAIL` a new generated password, print it, end their sessions, and exit")
 	flag.Parse()
+
+	// Each Argon2id hash uses about 64 MiB; keep the same memory cap for
+	// the server and the account commands.
+	password.SetConcurrency(3)
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if *healthcheck {
