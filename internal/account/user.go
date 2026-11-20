@@ -142,6 +142,14 @@ func (s *Store) List(ctx context.Context) ([]UserSummary, error) {
 	return out, rows.Err()
 }
 
+// UpgradePasswordHash replaces the verified hash without changing any
+// sessions. A concurrent password change wins: no matching row is a no-op.
+func (s *Store) UpgradePasswordHash(ctx context.Context, userID int64, verifiedHash, replacement string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ?`,
+		replacement, userID, verifiedHash)
+	return err
+}
+
 // SetPassword replaces a user's password and ends their sessions, except
 // keepSession (the one making the change, or 0 for none). Whoever knew the
 // old password is signed out everywhere.

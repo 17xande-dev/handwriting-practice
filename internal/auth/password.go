@@ -20,6 +20,8 @@ const MinPasswordLength = 12
 // MaxPasswordLength bounds the bytes one request can ask argon2 to hash.
 const MaxPasswordLength = 256
 
+var queueWait = 2 * time.Second
+
 var ErrPasswordTooShort = fmt.Errorf("the password must be at least %d characters", MinPasswordLength)
 var ErrPasswordTooLong = fmt.Errorf("the password must be at most %d characters", MaxPasswordLength)
 
@@ -40,7 +42,7 @@ func HashPassword(ctx context.Context, pw string) (string, error) {
 	if err := CheckPolicy(pw); err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, queueWait)
 	defer cancel()
 	return password.Hash(ctx, pw)
 }
@@ -48,14 +50,18 @@ func HashPassword(ctx context.Context, pw string) (string, error) {
 // VerifyPassword reports whether pw matches the stored hash. Existing
 // credentials aren't subject to the new-password minimum length.
 func VerifyPassword(ctx context.Context, pw, hash string) (bool, error) {
-	if len(pw) > MaxPasswordLength {
-		return false, nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	// This app does not rewrite hashes at sign-in.
-	ok, _, err := password.Check(ctx, hash, pw)
+	ok, _, err := CheckPassword(ctx, pw, hash)
 	return ok, err
+}
+
+// CheckPassword also reports whether a verified hash should be upgraded.
+func CheckPassword(ctx context.Context, pw, hash string) (ok, rehash bool, err error) {
+	if len(pw) > MaxPasswordLength {
+		return false, false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, queueWait)
+	defer cancel()
+	return password.Check(ctx, hash, pw)
 }
 
 // SpendVerifyTime does one dummy check for an unknown email.
@@ -63,7 +69,7 @@ func SpendVerifyTime(ctx context.Context, pw string) error {
 	if len(pw) > MaxPasswordLength {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, queueWait)
 	defer cancel()
 	_, err := password.CheckDummy(ctx, pw)
 	return err

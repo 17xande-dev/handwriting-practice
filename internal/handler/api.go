@@ -119,7 +119,7 @@ func (s *Server) apiToken(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusTooManyRequests, "too many attempts; wait a minute")
 		return
 	}
-	u, err := s.checkPassword(r, email, req.Password)
+	u, rehash, err := s.checkPassword(r, email, req.Password)
 	if errors.Is(err, errBadCredentials) {
 		apiError(w, http.StatusUnauthorized, loginFailed)
 		return
@@ -142,6 +142,7 @@ func (s *Server) apiToken(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, err)
 		return
 	}
+	s.upgradePasswordHash(r.Context(), u, req.Password, rehash)
 	s.accounts.RecordLogin(r.Context(), u.ID)
 	writeJSON(w, http.StatusOK, map[string]string{"token": token, "email": u.Email})
 }

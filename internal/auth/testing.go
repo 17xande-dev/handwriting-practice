@@ -14,3 +14,12 @@ func RunWithFastHashes(m *testing.M) int {
 	defer password.SetParamsForTesting(p)()
 	return m.Run()
 }
+
+// ExpirePasswordQueueForTest simulates an exhausted queue without running
+// expensive hashes or waiting on wall-clock time. Use in nonparallel tests.
+func ExpirePasswordQueueForTest(t testing.TB) {
+	t.Helper()
+	old := queueWait
+	queueWait = 0
+	t.Cleanup(func() { queueWait = old })
+}

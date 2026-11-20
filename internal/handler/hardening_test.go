@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"calligraphy/internal/auth"
 )
@@ -166,20 +165,29 @@ func TestIPv6ClientsShareTheirSlash64(t *testing.T) {
 	}
 }
 
-func TestPasswordQueueDeadlineIsBusyButCancellationIsNot(t *testing.T) {
+func TestSignInIsShedWhenPasswordQueueExpires(t *testing.T) {
 	s := newAccountServer(t)
-	deadline, stop := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
-	defer stop()
-	err := auth.SpendVerifyTime(deadline, testPassword)
-	rec := httptest.NewRecorder()
-	s.srv.serverError(rec, err)
-	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
-		t.Errorf("deadline: %d, Retry-After %q", rec.Code, rec.Header().Get("Retry-After"))
+	s.addUser(t, "a@x.com", false)
+	auth.ExpirePasswordQueueForTest(t)
+	for _, email := range []string{"a@x.com", "unknown@x.com"} {
+		rec := s.do(t, "POST", "/account/login", url.Values{"email": {email}, "password": {testPassword}}, "")
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
+			t.Errorf("form (%s): status %d, Retry-After %q", email, rec.Code, rec.Header().Get("Retry-After"))
+		}
 	}
+	rec := s.api(t, "POST", "/api/token", fmt.Sprintf(`{"email":"a@x.com","password":%q}`, testPassword), "", "")
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" ||
+		!strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") || !strings.Contains(rec.Body.String(), "busy") {
+		t.Errorf("token: status %d, headers %v, body %s", rec.Code, rec.Header(), rec.Body)
+	}
+}
+
+func TestCanceledPasswordWaitIsNotBusy(t *testing.T) {
+	s := newAccountServer(t)
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
-	err = auth.SpendVerifyTime(canceled, testPassword)
-	rec = httptest.NewRecorder()
+	err := auth.SpendVerifyTime(canceled, testPassword)
+	rec := httptest.NewRecorder()
 	s.srv.serverError(rec, err)
 	if rec.Code == http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "" {
 		t.Errorf("cancellation: %d, Retry-After %q", rec.Code, rec.Header().Get("Retry-After"))
