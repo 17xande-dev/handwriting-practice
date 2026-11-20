@@ -39,7 +39,7 @@ change the TypeScript: the bundle is checked in, so `go build` alone works.
 | `internal/account`, `internal/auth` | Users and sessions in SQLite; argon2id and token hashing |
 | `internal/history` | The synced `check` and `ink` records |
 | `internal/db` | SQLite, numbered migrations, daily backups |
-| `internal/middleware` | Rate limiting, client IP, request log |
+| `internal/middleware` | Request log (rate limiting and client IP come from `github.com/17xande-dev/ratelimit`) |
 | `web/` | TypeScript source for the drawing surface, bundled to `internal/handler/static/app.js` |
 
 ### Pencil input

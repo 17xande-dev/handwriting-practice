@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
@@ -126,11 +127,20 @@ func TestBadEmailsSkipTheLimiter(t *testing.T) {
 func TestEmailLimiterKeyIsAHash(t *testing.T) {
 	s := newAccountServer(t)
 	s.addUser(t, "a@x.com", false)
-	s.do(t, "POST", "/account/login", url.Values{"email": {"A@X.com"}, "password": {"wrong password!"}}, "")
-	for _, k := range s.srv.limits.loginEmail.Keys() {
-		if strings.Contains(k, "x.com") {
-			t.Errorf("limiter key %q contains the email", k)
-		}
+	for range 5 {
+		s.do(t, "POST", "/account/login", url.Values{"email": {"A@X.com"}, "password": {"wrong password!"}}, "")
+	}
+	// The limiter no longer lists keys, so prove the key by probing: after
+	// the burst is spent, only the hash of the normalised email is refused.
+	h := sha256.Sum256([]byte("a@x.com"))
+	if !s.srv.limits.loginEmail.Exhausted(string(h[:])) {
+		t.Error("the email's bucket is not keyed on the hash of the normalised email")
+	}
+	if n := s.srv.limits.loginEmail.Len(); n != 1 {
+		t.Errorf("%d email buckets, want 1 (case changes share one)", n)
+	}
+	if s.srv.limits.loginEmail.Exhausted("a@x.com") || s.srv.limits.loginEmail.Exhausted("A@X.com") {
+		t.Error("a raw email is a limiter key")
 	}
 }
 

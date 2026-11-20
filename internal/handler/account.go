@@ -13,7 +13,6 @@ import (
 
 	"calligraphy/internal/account"
 	"calligraphy/internal/auth"
-	"calligraphy/internal/middleware"
 )
 
 // sessionCookie carries a browser's session token.
@@ -222,8 +221,8 @@ var errBadCredentials = errors.New("bad credentials")
 // refused never reaches the email limit: it would otherwise leave a bucket
 // per fresh email for as long as buckets live. A refusal is logged.
 func (s *Server) allowLogin(r *http.Request, email string) bool {
-	ip := s.clientIP(r)
-	ipOK := s.limits.loginIP.Allow(middleware.IPKey(ip))
+	ip := s.ipAddr(r)
+	ipOK := s.limits.loginIP.Allow(s.ipKey(r))
 	emailOK := true
 	if ipOK {
 		h := sha256.Sum256([]byte(email))
@@ -243,7 +242,7 @@ func (s *Server) checkPassword(r *http.Request, email, pw string) (account.User,
 	bad := func(why string) (account.User, bool, error) {
 		// Never the password or the email itself; the why is for the operator
 		// only, the client sees one message.
-		s.log.Warn("sign-in failed", "email", emailTag(email), "ip", s.clientIP(r), "path", r.URL.Path, "why", why)
+		s.log.Warn("sign-in failed", "email", emailTag(email), "ip", s.ipAddr(r), "path", r.URL.Path, "why", why)
 		return account.User{}, false, errBadCredentials
 	}
 	u, err := s.accounts.ByEmail(r.Context(), email)
@@ -325,8 +324,8 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, u accoun
 	}
 	// Limited like sign-in: a form that checks the current password is a
 	// guessing oracle for anyone holding a stolen cookie.
-	if !s.limits.loginIP.Allow(middleware.IPKey(s.clientIP(r))) || !s.limits.password.Allow(strconv.FormatInt(u.ID, 10)) {
-		s.log.Warn("password change rate limited", "user", u.ID, "ip", s.clientIP(r))
+	if !s.limits.loginIP.Allow(s.ipKey(r)) || !s.limits.password.Allow(strconv.FormatInt(u.ID, 10)) {
+		s.log.Warn("password change rate limited", "user", u.ID, "ip", s.ipAddr(r))
 		back("rate-limited")
 		return
 	}
@@ -336,7 +335,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, u accoun
 		return
 	}
 	if !ok {
-		s.log.Warn("password change failed", "user", u.ID, "ip", s.clientIP(r))
+		s.log.Warn("password change failed", "user", u.ID, "ip", s.ipAddr(r))
 		back("wrong-password")
 		return
 	}

@@ -100,7 +100,7 @@ func run(log *slog.Logger) error {
 		Log:      log,
 		Accounts: accounts,
 		History:  history.NewStore(database),
-		ClientIP: middleware.ClientIP(cfg.ClientIPHeader),
+		ClientIP: cfg.ClientIP,
 		HSTS:     cfg.HSTS,
 	})
 	if err != nil {

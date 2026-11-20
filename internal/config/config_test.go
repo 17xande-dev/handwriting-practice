@@ -1,6 +1,8 @@
 package config
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -45,5 +47,45 @@ func TestLoadReportsAllErrors(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %s", err, want)
 		}
+	}
+}
+
+// CLIENT_IP_HEADER becomes a policy: unset is the peer, a configured header is
+// trusted, anything else (an invalid header name) fails at startup.
+func TestLoadClientIPSource(t *testing.T) {
+	req := func(peer string, hdr map[string]string) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = peer
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		return r
+	}
+	spoof := map[string]string{"CF-Connecting-IP": "203.0.113.9", "X-Forwarded-For": "203.0.113.8"}
+
+	c, err := Load(env(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.ClientIP.Addr(req("10.0.0.1:5", spoof)).String(); got != "10.0.0.1" {
+		t.Errorf("unset: %s, want the peer", got)
+	}
+
+	c, err = Load(env(map[string]string{"CLIENT_IP_HEADER": "cf-connecting-ip"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.ClientIP.Addr(req("10.0.0.1:5", spoof)).String(); got != "203.0.113.9" {
+		t.Errorf("configured: %s, want the header", got)
+	}
+	if got := c.ClientIP.Addr(req("10.0.0.1:5", map[string]string{"X-Forwarded-For": "203.0.113.8"})).String(); got != "10.0.0.1" {
+		t.Errorf("other headers must not count: %s", got)
+	}
+	if got := c.ClientIP.Addr(req("10.0.0.1:5", map[string]string{"CF-Connecting-IP": "junk"})).String(); got != "10.0.0.1" {
+		t.Errorf("junk header: %s, want the peer", got)
+	}
+
+	if _, err := Load(env(map[string]string{"CLIENT_IP_HEADER": "Bad Header"})); err == nil || !strings.Contains(err.Error(), "CLIENT_IP_HEADER") {
+		t.Errorf("invalid header name accepted: %v", err)
 	}
 }

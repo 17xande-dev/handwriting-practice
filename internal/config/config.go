@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/17xande-dev/ratelimit/clientip"
 )
 
 // Config is the whole runtime configuration.
@@ -37,6 +39,9 @@ type Config struct {
 	// arrives through that proxy: otherwise anyone can send the header and
 	// pick their own rate-limit bucket.
 	ClientIPHeader string
+
+	// ClientIP is the policy built from ClientIPHeader, for rate limiting.
+	ClientIP clientip.Source
 }
 
 // Load reads configuration through getenv (os.Getenv in production, a map in
@@ -71,6 +76,11 @@ func Load(getenv func(string) string) (Config, error) {
 
 	c.DBPath = getenv("DB_PATH")
 	c.ClientIPHeader = getenv("CLIENT_IP_HEADER")
+	if src, err := clientip.New(clientip.Config{TrustedHeader: c.ClientIPHeader}); err != nil {
+		errs = append(errs, fmt.Sprintf("CLIENT_IP_HEADER: %v", err))
+	} else {
+		c.ClientIP = src
+	}
 
 	if len(errs) > 0 {
 		return Config{}, fmt.Errorf("config: %s", strings.Join(errs, "; "))

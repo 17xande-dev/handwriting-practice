@@ -18,10 +18,12 @@ import (
 	"calligraphy/internal/account"
 	"calligraphy/internal/fonts"
 	"calligraphy/internal/history"
-	"calligraphy/internal/middleware"
 	"calligraphy/internal/sheets"
 
 	"github.com/17xande-dev/password"
+	"github.com/17xande-dev/ratelimit"
+	"github.com/17xande-dev/ratelimit/clientip"
+	"golang.org/x/time/rate"
 )
 
 //go:embed templates
@@ -37,9 +39,9 @@ type Options struct {
 	// History is the synced check and ink records.
 	History *history.Store
 
-	// ClientIP returns the visitor's address for rate limiting; nil means
-	// the connection's own address.
-	ClientIP func(*http.Request) string
+	// ClientIP resolves the visitor's address for rate limiting; the zero
+	// value uses the connection's own address.
+	ClientIP clientip.Source
 
 	// HSTS adds Strict-Transport-Security; only for an https deployment.
 	HSTS bool
@@ -54,7 +56,7 @@ type Server struct {
 	policy   Policy
 	accounts *account.Store
 	history  *history.Store
-	clientIP func(*http.Request) string
+	clientIP clientip.Source
 	limits   limits
 }
 
@@ -63,12 +65,48 @@ type Server struct {
 // oracle and a memory lever.
 type limits struct {
 	// loginEmail is tight: five tries, then one a minute, per email.
-	loginEmail *middleware.Limiter
+	loginEmail *ratelimit.Limiter
 	// loginIP is looser, so one address cannot spray many emails.
-	loginIP *middleware.Limiter
+	loginIP *ratelimit.Limiter
 	// password limits the change-password form per account. It is keyed on
 	// the user, not the cookie, which an attacker could simply discard.
-	password *middleware.Limiter
+	password *ratelimit.Limiter
+}
+
+// newLimits builds the three limiters, all failing closed when full. A bucket
+// is dropped once idle for burst*interval, as before.
+func newLimits() (limits, error) {
+	mk := func(burst int, interval time.Duration) (*ratelimit.Limiter, error) {
+		return ratelimit.New(ratelimit.Config{
+			Rate: rate.Every(interval), Burst: burst, IdleTTL: time.Duration(burst) * interval,
+		})
+	}
+	var l limits
+	var err error
+	if l.loginEmail, err = mk(5, time.Minute); err != nil {
+		return limits{}, err
+	}
+	if l.loginIP, err = mk(10, 10*time.Second); err != nil {
+		return limits{}, err
+	}
+	if l.password, err = mk(5, time.Minute); err != nil {
+		return limits{}, err
+	}
+	return l, nil
+}
+
+// ipAddr is the visitor's address as the logs show it ("unknown" when the
+// connection's own address does not parse).
+func (s *Server) ipAddr(r *http.Request) string {
+	if a := s.clientIP.Addr(r); a.IsValid() {
+		return a.WithZone("").Unmap().String()
+	}
+	return "unknown"
+}
+
+// ipKey is the loginIP bucket key for r: one per IPv4 address, one per IPv6 /64.
+func (s *Server) ipKey(r *http.Request) string {
+	return ratelimit.IPKey(s.clientIP.Addr(r))
 }
 
 // page is the data every template receives.
@@ -124,17 +162,14 @@ func newServer(o Options) (*Server, error) {
 	a.add("font.css", css)
 	policy := newPolicy(o.Fonts)
 	policy.HSTS = o.HSTS
+	lims, err := newLimits()
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
 		fonts: o.Fonts, assets: a, log: o.Log, policy: policy,
 		accounts: o.Accounts, history: o.History, clientIP: o.ClientIP,
-		limits: limits{
-			loginEmail: middleware.NewLimiter(5, time.Minute),
-			loginIP:    middleware.NewLimiter(10, 10*time.Second),
-			password:   middleware.NewLimiter(5, time.Minute),
-		},
-	}
-	if s.clientIP == nil {
-		s.clientIP = middleware.ClientIP("")
+		limits: lims,
 	}
 	if s.pages, err = parsePages(a); err != nil {
 		return nil, err
