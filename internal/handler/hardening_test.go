@@ -182,6 +182,21 @@ func TestSignInIsShedWhenPasswordQueueExpires(t *testing.T) {
 	}
 }
 
+func TestAdminPasswordResetIsShedWhenPasswordQueueExpires(t *testing.T) {
+	s := newAccountServer(t)
+	admin := s.addUser(t, "admin@x.com", true)
+	u := s.addUser(t, "a@x.com", false)
+	cookie := s.signIn(t, admin.Email, testPassword)
+
+	// The session cookie lets the request reach hashing without first
+	// verifying a password, which would fail at the same queue deadline.
+	auth.ExpirePasswordQueueForTest(t)
+	rec := s.do(t, "POST", "/admin/users/"+itoa(u.ID)+"/reset", url.Values{}, cookie)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
+		t.Fatalf("admin reset: status %d, Retry-After %q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
+
 func TestCanceledPasswordWaitIsNotBusy(t *testing.T) {
 	s := newAccountServer(t)
 	canceled, cancel := context.WithCancel(t.Context())

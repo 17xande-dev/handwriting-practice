@@ -103,6 +103,27 @@ func TestSignInWithPreMigrationHash(t *testing.T) {
 	}
 }
 
+func TestSignInLeavesCurrentPasswordHashUnchanged(t *testing.T) {
+	for _, via := range []string{"form", "token"} {
+		t.Run(via, func(t *testing.T) {
+			s := newAccountServer(t)
+			u := s.addUser(t, "current@x.com", false)
+			if via == "token" {
+				s.deviceToken(t, u.Email, testPassword)
+			} else {
+				s.signIn(t, u.Email, testPassword)
+			}
+			got, err := s.accounts.ByID(t.Context(), u.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.PasswordHash != u.PasswordHash {
+				t.Fatal("sign-in rewrote a hash already at the current parameters")
+			}
+		})
+	}
+}
+
 func TestPasswordHashUpgradeDoesNotOverwriteNewerHash(t *testing.T) {
 	s := newAccountServer(t)
 	// Change the hash after verification but before the CAS, without relying
