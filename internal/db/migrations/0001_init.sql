@@ -1,3 +1,4 @@
+-- +goose Up
 -- Accounts and synced practice history. Every table is STRICT and every
 -- status column carries its CHECK from the start: neither can be added to an
 -- existing table later without rebuilding it.

@@ -2,6 +2,7 @@ package db_test
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,19 +65,152 @@ func TestForeignKeysEnforced(t *testing.T) {
 	}
 }
 
-// A newer database means a rollback deploy; running old code against a
-// schema it does not know would misread it.
-func TestRefusesNewerDatabase(t *testing.T) {
-	d, err := db.Open(filepath.Join(t.TempDir(), "x.db"))
+// legacyDB builds a database exactly as the old PRAGMA user_version runner
+// did: each embedded migration applied in its own transaction together with
+// the version bump, no migration table. Rows are inserted at the end.
+func legacyDB(t *testing.T, version int) (*sql.DB, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	files := []string{"0001_init.sql", "0002_strokes_kind.sql", "0003_prefs_kind.sql"}
+	for i, f := range files[:version] {
+		b, err := os.ReadFile("migrations/" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, err := d.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(string(b)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", i+1)); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return d, path
+}
+
+func statusLines(t *testing.T, d *sql.DB) string {
+	t.Helper()
+	lines, err := db.Status(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(strings.Fields(strings.Join(lines, "|")), " ")
+}
+
+// The adoption path: a production database made by the old runner, with rows,
+// must be adopted (not re-migrated), keep every row, report 1..N applied and
+// still take a later migration. Without Adopt, goose would run 0001 against
+// existing tables and fail, so this test is what proves Adopt is wired in.
+func TestAdoptsOldRunnerDatabase(t *testing.T) {
+	d, _ := legacyDB(t, 2)
+	for _, q := range []string{
+		`INSERT INTO users (email, password_hash, created_at) VALUES ('a@x.com', 'h', '')`,
+		`INSERT INTO records (user_id, kind, id, data) VALUES (1, 'strokes', 's1', '{}')`,
+	} {
+		if _, err := d.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := statusLines(t, d); got != "applied 0001_init.sql|applied 0002_strokes_kind.sql|pending 0003_prefs_kind.sql" {
+		t.Fatalf("status before adoption: %s", got)
+	}
+	var tables int
+	d.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'goose_db_version'`).Scan(&tables)
+	if tables != 0 {
+		t.Fatal("-migrate-status wrote the version table")
+	}
+	applied, err := db.Migrate(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applied) != 1 || applied[0] != "0003_prefs_kind.sql" {
+		t.Fatalf("applied %v, want only 0003 (1..2 adopted)", applied)
+	}
+	var users, recs int
+	d.QueryRow(`SELECT count(*) FROM users`).Scan(&users)
+	d.QueryRow(`SELECT count(*) FROM records`).Scan(&recs)
+	if users != 1 || recs != 1 {
+		t.Fatalf("rows after adoption: %d users, %d records", users, recs)
+	}
+	if got := statusLines(t, d); got != "applied 0001_init.sql|applied 0002_strokes_kind.sql|applied 0003_prefs_kind.sql" {
+		t.Fatalf("status after: %s", got)
+	}
+	// A second start is a no-op.
+	if applied, err := db.Migrate(d); err != nil || len(applied) != 0 {
+		t.Fatalf("second run: %v, %v", applied, err)
+	}
+}
+
+// An up-to-date old database is adopted with nothing left to run.
+func TestAdoptsCurrentOldRunnerDatabase(t *testing.T) {
+	d, _ := legacyDB(t, 3)
+	applied, err := db.Migrate(d)
+	if err != nil || len(applied) != 0 {
+		t.Fatalf("applied %v, %v", applied, err)
+	}
+}
+
+// A fresh database runs everything from zero.
+func TestFreshDatabaseMigratesFromZero(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "fresh.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
+	applied, err := db.Migrate(d)
+	if err != nil || len(applied) != 3 {
+		t.Fatalf("applied %v, %v", applied, err)
+	}
+	if got := statusLines(t, d); got != "applied 0001_init.sql|applied 0002_strokes_kind.sql|applied 0003_prefs_kind.sql" {
+		t.Fatalf("status: %s", got)
+	}
+}
+
+// A newer database means a rollback deploy; running old code against a
+// schema it does not know would misread it. Both an unadopted old-runner
+// database and an already-goose one are refused, and the first untouched.
+func TestRefusesNewerDatabase(t *testing.T) {
+	d, _ := legacyDB(t, 3)
 	if _, err := d.Exec("PRAGMA user_version = 999"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Migrate(d); err == nil {
-		t.Fatal("migrated a database newer than the build")
+		t.Fatal("adopted a user_version database newer than the build")
+	}
+	var n int
+	d.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'goose_db_version'`).Scan(&n)
+	if n != 0 {
+		t.Error("a refused database was written to")
+	}
+
+	g := dbtest.New(t)
+	if _, err := g.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (999, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(g); err == nil {
+		t.Fatal("migrated a goose database newer than the build")
+	}
+}
+
+// Tables but no recorded version: the schema is unknowable, so refuse.
+func TestRefusesTablesWithoutHistory(t *testing.T) {
+	d, _ := legacyDB(t, 3)
+	if _, err := d.Exec("PRAGMA user_version = 0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(d); err == nil {
+		t.Fatal("adopted a database with tables and user_version 0")
 	}
 }
 

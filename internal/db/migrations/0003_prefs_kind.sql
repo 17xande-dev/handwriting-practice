@@ -1,3 +1,4 @@
+-- +goose Up
 -- Records gain a fourth kind, 'prefs' (a person's synced preferences, now the favourite fonts). A CHECK cannot be
 -- altered in place on a STRICT table, so the table is rebuilt exactly as in 0002: the old one is renamed (its
 -- AUTOINCREMENT counter goes with it), the new one is filled with every row and its seq values, and the

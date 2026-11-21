@@ -1,3 +1,4 @@
+-- +goose Up
 -- Records gain a third kind, 'strokes' (a person's stroke definitions for one font). A CHECK cannot be
 -- altered in place on a STRICT table, so the table is rebuilt: the old one is renamed (its
 -- AUTOINCREMENT counter goes with it), the new one is filled with every row and its seq values, and the
