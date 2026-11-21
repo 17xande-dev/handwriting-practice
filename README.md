@@ -38,7 +38,7 @@ change the TypeScript: the bundle is checked in, so `go build` alone works.
 | `internal/handler` | Routes, templates, embedded static files, security headers, the account and admin pages, `/api` |
 | `internal/account`, `internal/auth` | Users and sessions in SQLite; argon2id and token hashing |
 | `internal/history` | The synced `check` and `ink` records |
-| `internal/db` | SQLite, goose migrations on STRICT tables (`-migrate-status` lists them; a database from the old `user_version` runner is adopted once at startup), daily backups |
+| `internal/db` | SQLite (sqlitekit settings and backups), goose migrations on STRICT tables (`-migrate-status` lists them; a database from the old `user_version` runner is adopted once at startup) |
 | `internal/middleware` | Request log (rate limiting and client IP come from `github.com/17xande-dev/ratelimit`) |
 | `web/` | TypeScript source for the drawing surface, bundled to `internal/handler/static/app.js` |
 
@@ -347,8 +347,13 @@ Only set the variable when every request arrives through that proxy, or anyone
 can pick their own rate-limit bucket. Left empty it uses the connection's
 address. The distroless image has no shell, so the healthcheck is the binary
 probing itself (`/calligraphy -healthcheck`). It is one instance on one SQLite
-file: a second instance is the point at which this needs Postgres. The off-box
-copy of `/data/backups` is a decision still open. The SQLite driver is
+file: a second instance is the point at which this needs Postgres. **Backups**
+are `/data/backups/handwriting-YYYYMMDD.db` (UTC date), one per day, taken at
+startup and then daily by `sqlitekit.Backups`, the newest seven kept. Each is a
+`VACUUM INTO` copy: a complete, consistent database, made while the app
+writes. They sit on the same data volume, so they cover a bad migration or a
+mistaken delete but **do not survive losing the disk**; the off-box copy of
+`/data/backups` is a decision still open. The SQLite driver is
 pure Go (`modernc.org/sqlite`), so the build needs no cgo and the Dockerfile
 builds a static binary with no C toolchain; because the TypeScript bundles are
 checked in and `make check` fails when they are stale, it has no Deno stage.

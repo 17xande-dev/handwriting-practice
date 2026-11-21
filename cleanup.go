@@ -4,42 +4,63 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"time"
 
 	"calligraphy/internal/account"
-	"calligraphy/internal/db"
+
+	"github.com/17xande-dev/sqlitekit"
 )
 
 // keepBackups is a week of daily backups.
 const keepBackups = 7
 
-// backupDir sits beside the database, so in the container the backups land
-// on the same data volume. That guards against a bad migration or a
-// mistaken delete, not against losing the volume: an off-box copy is a
-// separate, still-open decision (README).
-func backupDir(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "backups")
+// backups describes the daily backups: dated VACUUM INTO copies beside the
+// database, so in the container they land on the same data volume. That
+// guards against a bad migration or a mistaken delete, not against losing the
+// volume: an off-box copy is a separate, still-open decision (README).
+func backups(dbPath string) sqlitekit.Backups {
+	return sqlitekit.Backups{
+		Dir:    filepath.Join(filepath.Dir(dbPath), "backups"),
+		Prefix: "handwriting-",
+		Layout: "20060102",
+		Keep:   keepBackups,
+	}
 }
 
-// maintain runs the daily chores until ctx ends: back up the database,
-// prune old backups, and delete expired browser sessions. The first run is
-// at startup, so a deploy always leaves a fresh backup of the state it
+// removeOldPartials deletes handwriting-*.partial files, the temporaries an
+// earlier version left when it crashed mid-backup. sqlitekit names and sweeps
+// its own temporaries, so nothing makes these any more and nothing else would
+// ever remove them.
+func removeOldPartials(log *slog.Logger, dir string) {
+	matches, err := filepath.Glob(filepath.Join(dir, "handwriting-*.partial"))
+	if err != nil {
+		return
+	}
+	for _, m := range matches {
+		if err := os.Remove(m); err != nil {
+			log.Error("remove old partial backup", "path", m, "err", err)
+			continue
+		}
+		log.Info("removed old partial backup", "path", m)
+	}
+}
+
+// maintain runs the daily chores until ctx ends: back up the database (which
+// also prunes old backups), and delete expired browser sessions. The first
+// run is at startup, so a deploy always leaves a fresh backup of the state it
 // started from.
 func maintain(ctx context.Context, log *slog.Logger, database *sql.DB, accounts *account.Store, dbPath string) {
+	b := backups(dbPath)
+	removeOldPartials(log, b.Dir)
 	tick := time.NewTicker(24 * time.Hour)
 	defer tick.Stop()
 	for {
-		dir := backupDir(dbPath)
-		if path, err := db.Backup(ctx, database, dir, time.Now()); err != nil {
+		if path, made, err := b.Run(ctx, database, time.Now()); err != nil {
 			log.Error("backup", "err", err)
-		} else {
+		} else if made {
 			log.Info("backup", "path", path)
-			if removed, err := db.Prune(dir, keepBackups); err != nil {
-				log.Error("prune backups", "err", err)
-			} else if len(removed) > 0 {
-				log.Info("pruned backups", "removed", removed)
-			}
 		}
 		if n, err := accounts.DeleteExpired(ctx); err != nil {
 			log.Error("expire sessions", "err", err)
