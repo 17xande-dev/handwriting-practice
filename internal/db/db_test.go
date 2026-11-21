@@ -9,6 +9,8 @@ import (
 
 	"calligraphy/internal/db"
 	"calligraphy/internal/dbtest"
+
+	"github.com/17xande-dev/sqlitekit"
 )
 
 // Checked against sqlite_master rather than the .sql files, because
@@ -233,7 +235,7 @@ func TestTransactionsBeginImmediate(t *testing.T) {
 	}
 	defer tx.Rollback()
 	// A second handle with no wait: it can only write if tx holds no lock yet.
-	other, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=0")
+	other, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(0)")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,5 +243,33 @@ func TestTransactionsBeginImmediate(t *testing.T) {
 	_, err = other.Exec(`INSERT INTO users (email, password_hash, created_at) VALUES ('a@x.com', 'h', '')`)
 	if err == nil || !strings.Contains(err.Error(), "locked") {
 		t.Fatalf("a write succeeded while a transaction was open (err = %v); transactions must begin immediate", err)
+	}
+}
+
+// Open must hand back a database whose settings are verified, not assumed:
+// both drivers silently ignore a misspelled DSN parameter.
+func TestOpenSettingsAreChecked(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := sqlitekit.Check(t.Context(), d, sqlitekit.Options{}); err != nil {
+		t.Fatalf("Check after Open: %v", err)
+	}
+	var fk, busy int
+	var mode string
+	d.QueryRow(`PRAGMA foreign_keys`).Scan(&fk)
+	d.QueryRow(`PRAGMA busy_timeout`).Scan(&busy)
+	d.QueryRow(`PRAGMA journal_mode`).Scan(&mode)
+	if fk != 1 || busy != 5000 || mode != "wal" {
+		t.Errorf("foreign_keys=%d busy_timeout=%d journal_mode=%s", fk, busy, mode)
+	}
+}
+
+// A database that cannot be opened fails Open itself (via Check), at startup.
+func TestOpenFailsOnUnwritablePath(t *testing.T) {
+	if _, err := db.Open(filepath.Join(t.TempDir(), "missing", "x.db")); err == nil {
+		t.Fatal("Open succeeded in a directory that does not exist")
 	}
 }

@@ -348,10 +348,14 @@ can pick their own rate-limit bucket. Left empty it uses the connection's
 address. The distroless image has no shell, so the healthcheck is the binary
 probing itself (`/calligraphy -healthcheck`). It is one instance on one SQLite
 file: a second instance is the point at which this needs Postgres. The off-box
-copy of `/data/backups` is a decision still open. `make build` and `go run`
-need cgo (SQLite); the Dockerfile builds a static musl binary and, because
-the TypeScript bundles are checked in and `make check` fails when they are
-stale, has no Deno stage.
+copy of `/data/backups` is a decision still open. The SQLite driver is
+pure Go (`modernc.org/sqlite`), so the build needs no cgo and the Dockerfile
+builds a static binary with no C toolchain; because the TypeScript bundles are
+checked in and `make check` fails when they are stale, it has no Deno stage.
+The database runs in WAL mode, so while the app is up it is three files
+(`handwriting.db`, `-wal`, `-shm`): never copy just the `.db` of a running app
+(`cp`, `docker cp`, a volume tar can miss committed data or capture a torn
+state). Use the daily backups, or stop the app first and copy all three files.
 
 ### Production: Kamal on the Docker host
 
@@ -390,8 +394,12 @@ kamal app exec -i --reuse "/calligraphy -reset-password you@example.com"
 kamal app logs -f            # or: kamal app logs --since 1h
 
 # Backups: the daily VACUUM INTO copies are in /data/backups (last seven kept).
-# The image has no shell or tar, so read the volume from a throwaway container
-# on the host (ssh ubuntu@home-docker):
+# They are complete, consistent databases, safe to copy. Do NOT copy the live
+# /data/handwriting.db while the app runs: it is WAL (three files while
+# running), so a plain copy can miss committed data. For a fresh copy of a
+# running app wait for the next daily backup, or stop the app first (see
+# Restore). The image has no shell, tar or sqlite3, so read the volume from a
+# throwaway container on the host (ssh ubuntu@home-docker):
 docker run --rm -v handwriting_data:/data -v "$PWD":/out busybox cp /data/backups/<file>.db /out/
 docker run --rm -v handwriting_data:/data busybox ls -l /data/backups
 

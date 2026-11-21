@@ -12,7 +12,7 @@ run: bundle
 bundle:
 	deno task -q bundle
 
-## build: a binary in ./bin (cgo, for SQLite; the Dockerfile builds the static one)
+## build: a binary in ./bin (pure Go: modernc SQLite needs no cgo)
 build: bundle
 	go build -trimpath -ldflags="-s -w" -o bin/calligraphy .
 

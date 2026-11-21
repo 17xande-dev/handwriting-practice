@@ -4,20 +4,18 @@
 # the bundles and the fonts are all go:embed'ed, so the runtime image is one
 # binary with no shell.
 #
-# The SQLite driver (mattn/go-sqlite3) is cgo, so this stage needs a C
-# compiler. Linking statically against musl keeps the binary self-contained,
-# which is what lets the runtime stay distroless/static (no libc). The tags
-# drop SQLite's extension loading (which static linking cannot support) and
-# use Go's own DNS and user lookups instead of libc's.
+# The SQLite driver (modernc.org/sqlite) is pure Go, so the build needs no C
+# toolchain and the binary is static, which is what lets the runtime stay
+# distroless/static (no libc). The tags use Go's own DNS and user lookups
+# instead of libc's.
 FROM golang:1.27-alpine AS build
-RUN apk add --no-cache gcc musl-dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=1 GOOS=linux go build -trimpath \
-      -tags sqlite_omit_load_extension,osusergo,netgo \
-      -ldflags='-s -w -linkmode external -extldflags "-static"' \
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+      -tags osusergo,netgo \
+      -ldflags='-s -w' \
       -o /out/calligraphy .
 # The data volume's mount point, owned by distroless's nonroot user. Docker
 # copies an image directory's ownership into a fresh named volume, so this is

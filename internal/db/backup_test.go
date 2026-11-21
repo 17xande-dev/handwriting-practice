@@ -26,7 +26,7 @@ func TestBackupIsARealDatabase(t *testing.T) {
 	if filepath.Base(path) != "handwriting-20261010.db" {
 		t.Errorf("name %s", path)
 	}
-	b, err := sql.Open("sqlite3", "file:"+path+"?mode=ro")
+	b, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestBackupReplacesLeftoverTemp(t *testing.T) {
 	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
 		t.Error("leftover temp still present")
 	}
-	b, err := sql.Open("sqlite3", "file:"+path+"?mode=ro")
+	b, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
 	if err != nil {
 		t.Fatal(err)
 	}
