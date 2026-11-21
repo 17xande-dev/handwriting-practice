@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,7 +26,7 @@ const (
 // transaction's view, so it is safe while the server writes, which a file
 // copy of a WAL database is not.
 func Backup(ctx context.Context, d *sql.DB, dir string, now time.Time) (string, error) {
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, backupPrefix+now.UTC().Format("20060102")+backupSuffix)
@@ -34,22 +35,34 @@ func Backup(ctx context.Context, d *sql.DB, dir string, now time.Time) (string, 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	// Written under a temporary name and renamed, so a crash mid-backup
-	// never leaves a truncated file that looks like a good one.
-	tmp := path + ".partial"
-	os.Remove(tmp)
+	// Written under a hidden temporary name and renamed, so a crash mid-backup
+	// never leaves a truncated file that looks like a good one, and the temp
+	// can never match Prune's pattern. VACUUM INTO refuses an existing file; a
+	// leftover is from a crashed attempt.
+	tmp := filepath.Join(dir, "."+filepath.Base(path)+".tmp")
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
 	if _, err := d.ExecContext(ctx, `VACUUM INTO ?`, tmp); err != nil {
 		os.Remove(tmp)
 		return "", fmt.Errorf("db: backup: %w", err)
 	}
+	// The copy holds account data and password hashes: owner-only.
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		os.Remove(tmp)
+		return "", err
+	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return "", err
 	}
 	return path, nil
 }
 
-// Prune keeps the newest keep backups in dir and deletes the rest.
+// Prune keeps the newest keep backups in dir and deletes the rest. keep is
+// clamped to at least 1, so Prune can never delete the backup just made.
 func Prune(dir string, keep int) ([]string, error) {
+	keep = max(keep, 1)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
