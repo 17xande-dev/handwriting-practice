@@ -6,13 +6,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"calligraphy/internal/account"
 	"calligraphy/internal/auth"
+
+	"github.com/17xande-dev/websec"
 )
 
 // sessionCookie carries a browser's session token.
@@ -101,31 +102,13 @@ func clearSessionCookie(w http.ResponseWriter) {
 		Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 }
 
-// safeNext keeps a post-sign-in redirect on this site: a path starting with
-// exactly one "/", with no scheme, host or control characters. Browsers strip
-// tabs and newlines from a URL and read a backslash as a slash, so "/\tevil",
-// "/%09/evil.example" and "/\\evil" would all send the visitor to another
-// host. Anything doubtful is dropped (the redirect goes to /account).
+// safeNext keeps a post-sign-in redirect on this site. The rules (browsers
+// strip tabs and newlines and read a backslash as a slash, so "/\tevil" would
+// leave the site) live in websec.SafeRedirect. No Prefix or Deny: any
+// same-site page is a fine landing spot, and an empty fallback sends the
+// redirect to /account.
 func safeNext(next string) string {
-	if next == "" || len(next) > 2048 || next[0] != '/' || strings.HasPrefix(next, "//") {
-		return ""
-	}
-	bad := func(s string) bool {
-		return strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f || r == '\\' })
-	}
-	if bad(next) {
-		return ""
-	}
-	u, err := url.Parse(next)
-	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" {
-		return ""
-	}
-	// The decoded path must hold the same line: "/%09/evil.example" decodes
-	// to "/<tab>/evil.example", and a proxy or a later decode might act on it.
-	if bad(u.Path) || !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") {
-		return ""
-	}
-	return next
+	return websec.SafeRedirect(next, websec.RedirectOptions{Fallback: ""})
 }
 
 func (s *Server) accountGet(w http.ResponseWriter, r *http.Request) {

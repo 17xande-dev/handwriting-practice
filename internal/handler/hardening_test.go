@@ -18,41 +18,24 @@ import (
 	"calligraphy/internal/auth"
 )
 
-// A browser reads "/%09/evil.example" and "/\t/evil" as "//evil.example" (it
-// drops tabs and newlines), and "/\\evil" as "//evil": every one of these
-// would be an open redirect after sign-in.
+// The rules are websec's and tested there; this keeps one row per class at
+// this call site: a hostile value (a browser drops the tab, so "/\t/evil" is
+// "//evil"), one the app's own auth redirect produces, and the deltas from the
+// old local copy (dot segments, inner "//", trailing space now refused).
 func TestSafeNext(t *testing.T) {
 	for next, want := range map[string]string{
-		"/progress":            "/progress",
-		"/sheet/arches?x=1#y":  "/sheet/arches?x=1#y",
-		"/":                    "/",
-		"":                     "",
-		"/%09/evil.example":    "",
-		"/\t/evil":             "",
-		"/\n/evil":             "",
-		"/\\evil":              "",
-		"/\\\\evil":            "",
-		"/%5Cevil":             "",
-		"https://evil":         "",
-		"//evil":               "",
-		"///evil":              "",
-		"evil":                 "",
-		"/%2F/evil":            "", // decodes to "//evil"; refused even though a browser would keep it one segment
-		"/a\x00b":              "",
-		"/a\x7fb":              "",
-		"javascript:alert(1)":  "",
-		"/%0a/evil.example":    "",
-		"/..%2f..%2fetc":       "/..%2f..%2fetc",
-		"/ok?next=//evil":      "/ok?next=//evil",
-		"/\u2028/evil":         "/\u2028/evil",
-		"/%00":                 "",
-		"/path with space":     "/path with space",
-		"/%":                   "",
-		"/%zz":                 "",
-		"/a/\x1f":              "",
-		"//":                   "",
-		"/\r/evil":             "",
-		"http://evil.example/": "",
+		"/progress":           "/progress",
+		"/sheet/arches?x=1#y": "/sheet/arches?x=1#y",
+		"/":                   "/",
+		"":                    "",
+		"/\t/evil.example":    "",
+		"/%09/evil.example":   "",
+		"//evil":              "",
+		"https://evil":        "",
+		"/a/../b":             "",
+		"/a//b":               "",
+		"/a ":                 "",
+		"/..%2f..%2fetc":      "/..%2f..%2fetc",
 	} {
 		if got := safeNext(next); got != want {
 			t.Errorf("safeNext(%q) = %q, want %q", next, got, want)
@@ -68,6 +51,17 @@ func TestSignInRedirectRefusesControlCharacters(t *testing.T) {
 		if loc := rec.Header().Get("Location"); loc != "/account" {
 			t.Errorf("next=%q: redirected to %q", next, loc)
 		}
+	}
+}
+
+// The wiring, not the algorithm: a legitimate target (with a query, as the
+// auth redirect builds it) survives the sign-in POST, and a hostile one does not.
+func TestSignInRedirectKeepsLegitimateNext(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "a@x.com", false)
+	rec := s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}, "next": {"/sheet/arches?x=1"}}, "")
+	if loc := rec.Header().Get("Location"); loc != "/sheet/arches?x=1" {
+		t.Errorf("redirected to %q", loc)
 	}
 }
 
