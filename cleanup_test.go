@@ -36,7 +36,9 @@ func TestMaintainTakesABackupAndRemovesOldPartials(t *testing.T) {
 	}
 	partial := filepath.Join(bdir, "handwriting-20261004.db.partial")
 	other := filepath.Join(bdir, "notes.txt")
-	for _, f := range []string{partial, other} {
+	// A widened glob (*.partial) would delete this one.
+	foreign := filepath.Join(bdir, "notes.partial")
+	for _, f := range []string{partial, other, foreign} {
 		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -67,5 +69,8 @@ func TestMaintainTakesABackupAndRemovesOldPartials(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Error("an unrelated file was removed")
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Error("notes.partial was removed: the glob is too wide")
 	}
 }

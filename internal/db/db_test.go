@@ -1,7 +1,9 @@
 package db_test
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -380,17 +382,30 @@ func TestTransactionsBeginImmediate(t *testing.T) {
 	}
 }
 
-// Open must hand back a database whose settings are verified, not assumed:
-// both drivers silently ignore a misspelled DSN parameter.
-func TestOpenSettingsAreChecked(t *testing.T) {
+// Open must run the settings check, not just ping: both drivers silently
+// ignore a misspelled DSN parameter. Swapping the check for a failing one
+// proves Open consults it and refuses to return the database.
+func TestOpenRefusesWhenSettingsCheckFails(t *testing.T) {
+	want := errors.New("settings did not take")
+	db.SetCheckSettings(func(context.Context, *sql.DB, sqlitekit.Options) error { return want })
+	t.Cleanup(db.ResetCheckSettings)
+	d, err := db.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err == nil {
+		d.Close()
+		t.Fatal("Open returned a database whose settings check failed")
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("Open error = %v, want it to wrap the check's error", err)
+	}
+}
+
+// Open's DSN really yields the house settings.
+func TestOpenAppliesSettings(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "x.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	if err := sqlitekit.Check(t.Context(), d, sqlitekit.Options{}); err != nil {
-		t.Fatalf("Check after Open: %v", err)
-	}
 	var fk, busy int
 	var mode string
 	d.QueryRow(`PRAGMA foreign_keys`).Scan(&fk)

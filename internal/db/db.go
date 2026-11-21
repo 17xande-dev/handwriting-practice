@@ -24,6 +24,10 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// checkSettings is a variable only so a test can prove Open refuses a database
+// whose settings did not take; nothing else replaces it.
+var checkSettings = sqlitekit.Check
+
 // Open opens (creating if absent) the database at path with the house
 // settings from sqlitekit (foreign keys, WAL, busy timeout, immediate
 // transactions) and refuses to return it unless Check confirms they took.
@@ -47,7 +51,7 @@ func Open(path string) (*sql.DB, error) {
 	// sql.Open is lazy; Check is the first query, so a bad path or an
 	// unwritable directory fails at startup rather than on the first sign-in,
 	// and so does a setting the driver silently ignored.
-	if err := sqlitekit.Check(context.Background(), d, opts); err != nil {
+	if err := checkSettings(context.Background(), d, opts); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("db: open %s: refusing to run: %w", path, err)
 	}

@@ -49,8 +49,9 @@ func removeOldPartials(log *slog.Logger, dir string) {
 
 // maintain runs the daily chores until ctx ends: back up the database (which
 // also prunes old backups), and delete expired browser sessions. The first
-// run is at startup, so a deploy always leaves a fresh backup of the state it
-// started from.
+// run is at startup, but there is one backup per day: if today's already
+// exists a restart writes none, so the daily file is the first of the day, not
+// a snapshot of what a deploy started from. Take a backup before a deploy.
 func maintain(ctx context.Context, log *slog.Logger, database *sql.DB, accounts *account.Store, dbPath string) {
 	b := backups(dbPath)
 	removeOldPartials(log, b.Dir)
