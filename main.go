@@ -81,18 +81,14 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	database, err := openDB(cfg)
-	if err != nil {
-		return err
-	}
-	defer database.Close()
-	applied, err := db.Migrate(database)
+	database, applied, err := openMigratedDB(cfg)
 	for _, name := range applied {
 		log.Info("migrated", "migration", name)
 	}
 	if err != nil {
 		return err
 	}
+	defer database.Close()
 
 	accounts := account.NewStore(database)
 	h, err := handler.New(handler.Options{
@@ -150,10 +146,20 @@ func run(log *slog.Logger) error {
 // server, so each refuses a missing DB_PATH the same way.
 func openDB(cfg config.Config) (*sql.DB, error) {
 	if cfg.DBPath == "" {
-		return nil, errors.New("DB_PATH is not set: it names the SQLite file for accounts and history (e.g. /data/handwriting.db)")
+		return nil, errNoDBPath
 	}
 	return db.Open(cfg.DBPath)
 }
+
+// openMigratedDB is openDB plus the migrations, under the migration lock.
+func openMigratedDB(cfg config.Config) (*sql.DB, []string, error) {
+	if cfg.DBPath == "" {
+		return nil, nil, errNoDBPath
+	}
+	return db.OpenMigrated(cfg.DBPath)
+}
+
+var errNoDBPath = errors.New("DB_PATH is not set: it names the SQLite file for accounts and history (e.g. /data/handwriting.db)")
 
 func printMigrateStatus() error {
 	cfg, err := config.Load(os.Getenv)
@@ -183,13 +189,10 @@ func withStore(fn func(context.Context, *account.Store) error) error {
 	if err != nil {
 		return err
 	}
-	database, err := openDB(cfg)
+	database, _, err := openMigratedDB(cfg)
 	if err != nil {
 		return err
 	}
 	defer database.Close()
-	if _, err := db.Migrate(database); err != nil {
-		return err
-	}
 	return fn(context.Background(), account.NewStore(database))
 }

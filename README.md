@@ -361,6 +361,9 @@ The database runs in WAL mode, so while the app is up it is three files
 (`handwriting.db`, `-wal`, `-shm`): never copy just the `.db` of a running app
 (`cp`, `docker cp`, a volume tar can miss committed data or capture a torn
 state). Use the daily backups, or stop the app first and copy all three files.
+A fourth file, `handwriting.db.migrate-lock`, sits beside the database: it serialises
+migrations between processes that open it at the same time (it is released when a process
+exits). It is created on first open and never deleted, so leave it alone while the app runs.
 
 ### Production: Kamal on the Docker host
 

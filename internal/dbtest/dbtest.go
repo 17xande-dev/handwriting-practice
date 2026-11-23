@@ -14,13 +14,10 @@ import (
 // New opens a fresh, fully migrated database in the test's temp directory.
 func New(t testing.TB) *sql.DB {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	d, _, err := db.OpenMigrated(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
-	if _, err := db.Migrate(d); err != nil {
-		t.Fatal(err)
-	}
 	return d
 }
