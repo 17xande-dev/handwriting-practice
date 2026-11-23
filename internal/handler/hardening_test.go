@@ -20,8 +20,10 @@ import (
 
 // The rules are websec's and tested there; this keeps one row per class at
 // this call site: a hostile value (a browser drops the tab, so "/\t/evil" is
-// "//evil"), one the app's own auth redirect produces, and the deltas from the
-// old local copy (dot segments, inner "//", trailing space now refused).
+// "//evil"), legitimate relative targets (the auth redirect itself builds
+// "next" from r.URL.Path alone, so a query and a fragment are not something it
+// produces: those rows only show they are kept), and the deltas from the old
+// local copy (dot segments, inner "//", trailing space now refused).
 func TestSafeNext(t *testing.T) {
 	for next, want := range map[string]string{
 		"/progress":           "/progress",
@@ -54,8 +56,9 @@ func TestSignInRedirectRefusesControlCharacters(t *testing.T) {
 	}
 }
 
-// The wiring, not the algorithm: a legitimate target (with a query, as the
-// auth redirect builds it) survives the sign-in POST, and a hostile one does not.
+// The wiring, not the algorithm: a legitimate target with a query survives the
+// sign-in POST. That the sign-in POST refuses a hostile one is the test above
+// (the auth redirect builds "next" from r.URL.Path, so it never carries a query).
 func TestSignInRedirectKeepsLegitimateNext(t *testing.T) {
 	s := newAccountServer(t)
 	s.addUser(t, "a@x.com", false)
