@@ -142,16 +142,9 @@ func run(log *slog.Logger) error {
 	return srv.Shutdown(shutdownCtx)
 }
 
-// openDB opens the configured database. The flag commands share it with the
-// server, so each refuses a missing DB_PATH the same way.
-func openDB(cfg config.Config) (*sql.DB, error) {
-	if cfg.DBPath == "" {
-		return nil, errNoDBPath
-	}
-	return db.Open(cfg.DBPath)
-}
-
-// openMigratedDB is openDB plus the migrations, under the migration lock.
+// openMigratedDB opens the configured database and migrates it, under the
+// migration lock; the flag commands share it with the server, so each refuses
+// a missing DB_PATH the same way.
 func openMigratedDB(cfg config.Config) (*sql.DB, []string, error) {
 	if cfg.DBPath == "" {
 		return nil, nil, errNoDBPath
@@ -166,12 +159,10 @@ func printMigrateStatus() error {
 	if err != nil {
 		return err
 	}
-	database, err := openDB(cfg)
-	if err != nil {
-		return err
+	if cfg.DBPath == "" {
+		return errNoDBPath
 	}
-	defer database.Close()
-	lines, err := db.Status(database)
+	lines, err := db.StatusAt(cfg.DBPath)
 	if err != nil {
 		return err
 	}

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -195,6 +196,35 @@ func Migrate(d *sql.DB) (applied []string, err error) {
 		applied = append(applied, filepath.Base(r.Source.Path))
 	}
 	return applied, err
+}
+
+// StatusAt is the -migrate-status command: it reports each migration of the
+// database at path as applied or pending. It never creates a database: a
+// missing file is reported as not yet migrated. For an existing file it holds
+// the migration lock from before the first query until it has closed the
+// database, because reading the status of an empty file still writes goose's
+// version table, and that write must not race another process's migration.
+func StatusAt(path string) ([]string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("db: status %s: %w", path, err)
+	}
+	if _, err := os.Stat(abs); errors.Is(err, fs.ErrNotExist) {
+		return []string{fmt.Sprintf("no database at %s: not yet migrated", abs)}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("db: status %s: %w", path, err)
+	}
+	abs, release, err := lock(abs)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	d, err := open(abs)
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	return Status(d)
 }
 
 // Status describes each known migration as applied or pending, for the
