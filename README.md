@@ -363,7 +363,7 @@ The database runs in WAL mode, so while the app is up it is three files
 state). Use the daily backups, or stop the app first and copy all three files.
 A fourth file, `handwriting.db.migrate-lock`, sits beside the database: it serialises
 migrations between processes that open it at the same time (it is released when a process
-exits). It is created on first open and never deleted, so leave it alone while the app runs.
+exits). It is created on first open and never deleted, so leave it alone while the app runs. Run migrating commands as the image user (e.g. through `kamal app exec`), never as root: a root-created `handwriting.db.migrate-lock` (0600) blocks the app user from migrating.
 
 ### Production: Kamal on the Docker host
 
