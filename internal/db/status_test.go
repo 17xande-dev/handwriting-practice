@@ -70,3 +70,38 @@ func TestStatusAtWaitsForTheMigrationLockBeforeWriting(t *testing.T) {
 		t.Fatal("status did not finish after the lock was released")
 	}
 }
+
+// The version table is written while status reads, so the lock must last until
+// the database is closed, not just until it is opened. Probed from inside
+// StatusAt, after the status is read: a second taker must still be refused.
+func TestStatusAtHoldsTheLockUntilItIsDone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fresh.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probed := false
+	restore := db.SetStatusHook(func() {
+		probed = true
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		if release, err := sqlitekit.MigrationLock(ctx, path); err == nil {
+			release()
+			t.Error("the migration lock was free while status was still running")
+		}
+	})
+	defer restore()
+	if _, err := db.StatusAt(path); err != nil {
+		t.Fatal(err)
+	}
+	if !probed {
+		t.Fatal("the hook never ran")
+	}
+	// And it is released afterwards.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	release, err := sqlitekit.MigrationLock(ctx, path)
+	if err != nil {
+		t.Fatalf("lock still held after status returned: %v", err)
+	}
+	release()
+}

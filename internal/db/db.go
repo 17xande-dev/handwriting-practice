@@ -224,12 +224,19 @@ func StatusAt(path string) ([]string, error) {
 		return nil, err
 	}
 	defer d.Close()
-	return Status(d)
+	lines, err := Status(d)
+	statusHook()
+	return lines, err
 }
 
-// Status describes each known migration as applied or pending, for the
-// -migrate-status flag. It never writes: a database still waiting to be
-// adopted is reported from its user_version instead.
+// statusHook runs after the status is read and before the database is closed
+// and the lock released, so a test can prove the lock is still held then.
+var statusHook = func() {}
+
+// Status describes each known migration as applied or pending. It never adopts
+// a legacy database (it is reported from its user_version), but on an empty
+// database goose still creates its version table, and Status takes no lock of
+// its own: the -migrate-status command goes through StatusAt, which does.
 func Status(d *sql.DB) ([]string, error) {
 	ctx := context.Background()
 	hasVersion, tables, uv, err := state(ctx, d)
