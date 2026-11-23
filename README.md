@@ -415,6 +415,21 @@ kamal app logs -f            # or: kamal app logs --since 1h
 docker run --rm -v handwriting_data:/data -v "$PWD":/out busybox cp /data/backups/<file>.db /out/
 docker run --rm -v handwriting_data:/data busybox ls -l /data/backups
 
+# Before a deploy: take a backup, because the daily one may predate the change
+# and a deploy that runs a migration cannot be undone by rolling the image back.
+# The image has no shell or sqlite3, so use a throwaway alpine container ON
+# home-docker. The backup runs as uid 65532 (a root read of a WAL database that
+# is not running would leave root-owned -wal/-shm files the app cannot use).
+# `.timeout 5000` waits out a write in progress; the last line must print `ok`.
+docker run --rm -v handwriting_data:/data alpine:3 sh -c '
+  set -e
+  apk add --no-cache sqlite >/dev/null
+  adduser -D -H -u 65532 app
+  su -s /bin/sh app -c "sqlite3 -bail -cmd \".timeout 5000\" /data/handwriting.db \".backup /data/handwriting-pre-deploy.db\""
+  chmod 600 /data/handwriting-pre-deploy.db
+  su -s /bin/sh app -c "sqlite3 -readonly /data/handwriting-pre-deploy.db \"PRAGMA integrity_check\""'
+# It overwrites an earlier handwriting-pre-deploy.db and is not pruned; delete it once the deploy is confirmed.
+
 # Restore: stop the app, put the copy in place, start it again. The files must
 # end up owned by uid 65532 (the nonroot user the app runs as). `kamal` lines
 # run from this repo on your laptop; the `docker run` line runs ON home-docker
