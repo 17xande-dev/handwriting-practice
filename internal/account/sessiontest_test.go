@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -22,6 +21,7 @@ import (
 	"calligraphy/internal/history"
 
 	"github.com/17xande-dev/websec/session/sessiontest"
+	"github.com/17xande-dev/websec/webtest"
 )
 
 const (
@@ -51,24 +51,28 @@ func (s sessionSuite) routes(t *testing.T) http.Handler {
 	return h
 }
 
-func sessionRequest(h http.Handler, method, path, contentType, body, cookie, bearer string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(method, "https://suite.example.test"+path, strings.NewReader(body))
+// sessionRequest sends one request to a fresh client on the suite's https
+// origin, with no Origin (the recorder request sent none), holding only the
+// cookie or bearer given.
+func sessionRequest(t *testing.T, h http.Handler, method, path, contentType, body, cookie, bearer string) *webtest.Response {
+	t.Helper()
+	c := webtest.New(t, h, "https://suite.example.test", webtest.NoOrigin())
+	if cookie != "" {
+		c.SetCookie(&http.Cookie{Name: suiteCookie, Value: cookie, Path: "/", Secure: true})
+	}
+	r := c.NewRequest(method, path, strings.NewReader(body))
 	if contentType != "" {
 		r.Header.Set("Content-Type", contentType)
-	}
-	if cookie != "" {
-		r.AddCookie(&http.Cookie{Name: suiteCookie, Value: cookie})
 	}
 	if bearer != "" {
 		r.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	return w
+	return c.Do(r)
 }
 
-func sessionForm(h http.Handler, path string, form url.Values, cookie string) *httptest.ResponseRecorder {
-	return sessionRequest(h, http.MethodPost, path, "application/x-www-form-urlencoded", form.Encode(), cookie, "")
+func sessionForm(t *testing.T, h http.Handler, path string, form url.Values, cookie string) *webtest.Response {
+	t.Helper()
+	return sessionRequest(t, h, http.MethodPost, path, "application/x-www-form-urlencoded", form.Encode(), cookie, "")
 }
 
 func (s sessionSuite) create(t *testing.T, kind, email string) string {
@@ -78,14 +82,12 @@ func (s sessionSuite) create(t *testing.T, kind, email string) string {
 	// minting fake tokens, disabling the limiter, or waiting for refills.
 	h := s.routes(t)
 	if kind == account.KindWeb {
-		w := sessionForm(h, "/account/login", url.Values{"email": {email}, "password": {suitePassword}}, "")
-		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/account" {
-			t.Fatalf("web login: status %d, want 303 to /account", w.Code)
+		w := sessionForm(t, h, "/account/login", url.Values{"email": {email}, "password": {suitePassword}}, "")
+		if w.Status != http.StatusSeeOther || w.Header.Get("Location") != "/account" {
+			t.Fatalf("web login: status %d, want 303 to /account", w.Status)
 		}
-		for _, c := range w.Result().Cookies() {
-			if c.Name == suiteCookie && c.Value != "" {
-				return c.Value
-			}
+		if c := w.SetCookie(suiteCookie); c.Value != "" {
+			return c.Value
 		}
 		t.Fatal("web login did not issue the session cookie")
 	}
@@ -93,10 +95,10 @@ func (s sessionSuite) create(t *testing.T, kind, email string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := sessionRequest(h, http.MethodPost, "/api/token", "application/json", string(body), "", "")
+	w := sessionRequest(t, h, http.MethodPost, "/api/token", "application/json", string(body), "", "")
 	var reply struct{ Token, Email string }
-	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &reply) != nil || reply.Token == "" || reply.Email != email {
-		t.Fatalf("device login: status %d, want 200 with a token for the right account", w.Code)
+	if w.Status != http.StatusOK || json.Unmarshal([]byte(w.Body), &reply) != nil || reply.Token == "" || reply.Email != email {
+		t.Fatalf("device login: status %d, want 200 with a token for the right account", w.Status)
 	}
 	return reply.Token
 }
@@ -163,9 +165,9 @@ func TestSessionStoreConformance(t *testing.T) {
 			}
 			adminAction := func(t *testing.T, email, action, notice string) {
 				t.Helper()
-				w := sessionForm(h, fmt.Sprintf("/admin/users/%d/%s", users[email], action), nil, adminCookie)
-				if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/users?notice="+notice {
-					t.Fatalf("admin %s: status %d, want 303 with %s notice", action, w.Code, notice)
+				w := sessionForm(t, h, fmt.Sprintf("/admin/users/%d/%s", users[email], action), nil, adminCookie)
+				if w.Status != http.StatusSeeOther || w.Header.Get("Location") != "/admin/users?notice="+notice {
+					t.Fatalf("admin %s: status %d, want 303 with %s notice", action, w.Status, notice)
 				}
 			}
 			tests := sessiontest.Harness{
@@ -190,16 +192,16 @@ func TestSessionStoreConformance(t *testing.T) {
 					if kind == account.KindDevice {
 						cookie, bearer = "", token
 					}
-					w := sessionRequest(h, http.MethodGet, "/api/me", "", "", cookie, bearer)
-					switch w.Code {
+					w := sessionRequest(t, h, http.MethodGet, "/api/me", "", "", cookie, bearer)
+					switch w.Status {
 					case http.StatusUnauthorized:
 						return "", false, nil
 					case http.StatusOK:
 						var reply struct{ Email string }
-						err := json.Unmarshal(w.Body.Bytes(), &reply)
+						err := json.Unmarshal([]byte(w.Body), &reply)
 						return reply.Email, err == nil, err
 					default:
-						return "", false, fmt.Errorf("GET /api/me: status %d", w.Code)
+						return "", false, fmt.Errorf("GET /api/me: status %d", w.Status)
 					}
 				},
 				Backdate: func(t *testing.T, token string, created, lastUsed time.Time) {
@@ -242,13 +244,13 @@ func TestSessionStoreConformance(t *testing.T) {
 					t.Helper()
 					device := s.create(t, account.KindDevice, email)
 					const next = "another test-only passphrase"
-					w := sessionForm(h, "/account/password", url.Values{"current": {suitePassword}, "new": {next}, "confirm": {next}}, current)
-					if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/account?notice=password-changed" {
-						t.Fatalf("change password: status %d, want 303 with password-changed notice", w.Code)
+					w := sessionForm(t, h, "/account/password", url.Values{"current": {suitePassword}, "new": {next}, "confirm": {next}}, current)
+					if w.Status != http.StatusSeeOther || w.Header.Get("Location") != "/account?notice=password-changed" {
+						t.Fatalf("change password: status %d, want 303 with password-changed notice", w.Status)
 					}
-					w = sessionRequest(h, http.MethodGet, "/api/me", "", "", "", device)
-					if w.Code != http.StatusUnauthorized {
-						t.Fatalf("device after own password change: status %d, want 401", w.Code)
+					w = sessionRequest(t, h, http.MethodGet, "/api/me", "", "", "", device)
+					if w.Status != http.StatusUnauthorized {
+						t.Fatalf("device after own password change: status %d, want 401", w.Status)
 					}
 					return current
 				}
@@ -278,18 +280,18 @@ func TestExpiredLegacyDeviceTokenReturns401(t *testing.T) {
 		now := time.Now()
 		// Before this release, a blank expiry meant a device never expired.
 		s.backdate(t, token, now.Add(-366*24*time.Hour), now.Add(-time.Minute), "")
-		w := sessionRequest(h, http.MethodPost, "/api/sync", "application/json", `{}`, "", token)
-		if w.Code != http.StatusUnauthorized || w.Header().Get("Cache-Control") != "no-store" {
-			t.Fatalf("sync with expired legacy device: status %d, want non-cacheable 401", w.Code)
+		w := sessionRequest(t, h, http.MethodPost, "/api/sync", "application/json", `{}`, "", token)
+		if w.Status != http.StatusUnauthorized || w.Header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("sync with expired legacy device: status %d, want non-cacheable 401", w.Status)
 		}
 	})
 	t.Run("active-despite-stale-stored-expiry", func(t *testing.T) {
 		token := s.create(t, account.KindDevice, u.Email)
 		now := time.Now()
 		s.backdate(t, token, now.Add(-200*24*time.Hour), now.Add(-time.Minute), sessionStamp(now.Add(-time.Hour)))
-		w := sessionRequest(h, http.MethodGet, "/api/me", "", "", "", token)
-		if w.Code != http.StatusOK {
-			t.Fatalf("active device with stale stored expiry: status %d, want 200", w.Code)
+		w := sessionRequest(t, h, http.MethodGet, "/api/me", "", "", "", token)
+		if w.Status != http.StatusOK {
+			t.Fatalf("active device with stale stored expiry: status %d, want 200", w.Status)
 		}
 	})
 }
