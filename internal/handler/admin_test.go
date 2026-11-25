@@ -42,13 +42,13 @@ func TestAdminRoutesRefuseOthers(t *testing.T) {
 		}
 		// Signed out: sent to sign in.
 		rec := s.do(t, method, path, form, "")
-		if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "/account") {
-			t.Errorf("%s anonymous: %d %s", route, rec.Code, rec.Header().Get("Location"))
+		if rec.Status != http.StatusSeeOther || !strings.HasPrefix(rec.Header.Get("Location"), "/account") {
+			t.Errorf("%s anonymous: %d %s", route, rec.Status, rec.Header.Get("Location"))
 		}
 		// Signed in without the role: a plain 404, as if nothing were there.
 		rec = s.do(t, method, path, form, cookie)
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("%s as a member: %d, want 404", route, rec.Code)
+		if rec.Status != http.StatusNotFound {
+			t.Errorf("%s as a member: %d, want 404", route, rec.Status)
 		}
 	}
 	// None of it happened.
@@ -66,11 +66,11 @@ func TestAdminHeaders(t *testing.T) {
 	s := newAccountServer(t)
 	for _, p := range []string{"/admin/users", "/admin/nope"} {
 		rec := s.do(t, "GET", p, nil, "")
-		if rec.Header().Get("X-Robots-Tag") != "noindex" || rec.Header().Get("Cache-Control") != "no-store" {
-			t.Errorf("%s: headers %v", p, rec.Header())
+		if rec.Header.Get("X-Robots-Tag") != "noindex" || rec.Header.Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: headers %v", p, rec.Header)
 		}
 	}
-	if rec := s.do(t, "GET", "/", nil, ""); rec.Header().Get("X-Robots-Tag") != "" {
+	if rec := s.do(t, "GET", "/", nil, ""); rec.Header.Get("X-Robots-Tag") != "" {
 		t.Error("public page carries the admin headers")
 	}
 }
@@ -85,13 +85,13 @@ func TestAdminCreatesAccountWithWorkingPassword(t *testing.T) {
 	cookie := s.signIn(t, "admin@x.com", testPassword)
 
 	rec := s.do(t, "POST", "/admin/users", url.Values{"email": {" New@X.com "}}, cookie)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("create: %d", rec.Code)
+	if rec.Status != http.StatusOK {
+		t.Fatalf("create: %d", rec.Status)
 	}
-	if rec.Header().Get("Cache-Control") != "no-store" {
+	if rec.Header.Get("Cache-Control") != "no-store" {
 		t.Error("password page is cacheable")
 	}
-	m := shownPassword.FindStringSubmatch(rec.Body.String())
+	m := shownPassword.FindStringSubmatch(rec.Body)
 	if m == nil {
 		t.Fatal("no password shown")
 	}
@@ -101,15 +101,15 @@ func TestAdminCreatesAccountWithWorkingPassword(t *testing.T) {
 	}
 
 	rec = s.do(t, "POST", "/admin/users", url.Values{"email": {"NEW@x.com"}}, cookie)
-	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "already an account") {
-		t.Errorf("duplicate: %d", rec.Code)
+	if rec.Status != http.StatusConflict || !strings.Contains(rec.Body, "already an account") {
+		t.Errorf("duplicate: %d", rec.Status)
 	}
 	rec = s.do(t, "POST", "/admin/users", url.Values{"email": {"not an email"}}, cookie)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("bad email: %d", rec.Code)
+	if rec.Status != http.StatusBadRequest {
+		t.Errorf("bad email: %d", rec.Status)
 	}
 	rec = s.do(t, "POST", "/admin/users", url.Values{"email": {"boss@x.com"}, "admin": {"1"}}, cookie)
-	if u, _ := s.accounts.ByEmail(t.Context(), "boss@x.com"); rec.Code != 200 || !u.IsAdmin {
+	if u, _ := s.accounts.ByEmail(t.Context(), "boss@x.com"); rec.Status != 200 || !u.IsAdmin {
 		t.Error("admin box ignored")
 	}
 }
@@ -122,15 +122,15 @@ func TestAdminResetPassword(t *testing.T) {
 	cookie := s.signIn(t, "admin@x.com", testPassword)
 
 	rec := s.do(t, "POST", "/admin/users/"+itoa(u.ID)+"/reset", url.Values{}, cookie)
-	m := shownPassword.FindStringSubmatch(rec.Body.String())
+	m := shownPassword.FindStringSubmatch(rec.Body)
 	if m == nil {
-		t.Fatalf("no password shown: %d", rec.Code)
+		t.Fatalf("no password shown: %d", rec.Status)
 	}
 	got, _ := s.accounts.ByID(t.Context(), u.ID)
 	if ok, _ := auth.VerifyPassword(t.Context(), m[1], got.PasswordHash); !ok {
 		t.Error("shown password does not verify")
 	}
-	if !strings.Contains(s.do(t, "GET", "/account", nil, userCookie).Body.String(), `action="/account/login"`) {
+	if !strings.Contains(s.do(t, "GET", "/account", nil, userCookie).Body, `action="/account/login"`) {
 		t.Error("the user's session survived the reset")
 	}
 }
@@ -145,15 +145,15 @@ func TestAdminGuards(t *testing.T) {
 
 	for _, action := range []string{"disable", "demote", "delete", "reset", "signout"} {
 		rec := s.do(t, "POST", "/admin/users/"+itoa(me.ID)+"/"+action, url.Values{}, cookie)
-		if loc := rec.Header().Get("Location"); loc != "/admin/users?notice=self" {
-			t.Errorf("%s on self: %d %s", action, rec.Code, loc)
+		if loc := rec.Header.Get("Location"); loc != "/admin/users?notice=self" {
+			t.Errorf("%s on self: %d %s", action, rec.Status, loc)
 		}
 	}
 	// Disable the other admin, then demote them: fine, they are disabled.
 	for _, action := range []string{"disable", "demote", "enable"} {
 		rec := s.do(t, "POST", "/admin/users/"+itoa(other.ID)+"/"+action, url.Values{}, cookie)
-		if loc := rec.Header().Get("Location"); strings.Contains(loc, "last-admin") || rec.Code != http.StatusSeeOther {
-			t.Errorf("%s other: %d %s", action, rec.Code, loc)
+		if loc := rec.Header.Get("Location"); strings.Contains(loc, "last-admin") || rec.Status != http.StatusSeeOther {
+			t.Errorf("%s other: %d %s", action, rec.Status, loc)
 		}
 	}
 	got, _ := s.accounts.ByID(t.Context(), other.ID)
@@ -161,15 +161,15 @@ func TestAdminGuards(t *testing.T) {
 		t.Errorf("other admin not demoted and re-enabled: %+v", got)
 	}
 	rec := s.do(t, "POST", "/admin/users/999/disable", url.Values{}, cookie)
-	if loc := rec.Header().Get("Location"); loc != "/admin/users?notice=not-found" {
+	if loc := rec.Header.Get("Location"); loc != "/admin/users?notice=not-found" {
 		t.Errorf("missing user: %s", loc)
 	}
 	rec = s.do(t, "GET", "/admin/users?notice=last-admin", nil, cookie)
-	if !strings.Contains(rec.Body.String(), "no enabled admin") {
+	if !strings.Contains(rec.Body, "no enabled admin") {
 		t.Error("last-admin notice not shown")
 	}
 	// Unknown notice codes show nothing.
-	if strings.Contains(s.do(t, "GET", "/admin/users?notice=%3Cb%3Ehi", nil, cookie).Body.String(), "&lt;b&gt;hi") {
+	if strings.Contains(s.do(t, "GET", "/admin/users?notice=%3Cb%3Ehi", nil, cookie).Body, "&lt;b&gt;hi") {
 		t.Error("an unknown notice was echoed")
 	}
 }
@@ -180,14 +180,14 @@ func TestAdminDeleteNeedsConfirmation(t *testing.T) {
 	u := s.addUser(t, "u@x.com", false)
 	cookie := s.signIn(t, "admin@x.com", testPassword)
 	rec := s.do(t, "GET", "/admin/users/"+itoa(u.ID)+"/delete", nil, cookie)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Delete u@x.com?") {
-		t.Fatalf("confirm page: %d", rec.Code)
+	if rec.Status != http.StatusOK || !strings.Contains(rec.Body, "Delete u@x.com?") {
+		t.Fatalf("confirm page: %d", rec.Status)
 	}
 	if _, err := s.accounts.ByID(t.Context(), u.ID); err != nil {
 		t.Fatal("the confirm page deleted the account")
 	}
 	rec = s.do(t, "POST", "/admin/users/"+itoa(u.ID)+"/delete", url.Values{}, cookie)
-	if loc := rec.Header().Get("Location"); loc != "/admin/users?notice=deleted" {
+	if loc := rec.Header.Get("Location"); loc != "/admin/users?notice=deleted" {
 		t.Fatalf("delete: %s", loc)
 	}
 	if _, err := s.accounts.ByID(t.Context(), u.ID); err == nil {
@@ -202,10 +202,10 @@ func TestAdminPagesHaveNoInlineContent(t *testing.T) {
 	u := s.addUser(t, "u@x.com", false)
 	cookie := s.signIn(t, "admin@x.com", testPassword)
 	pages := map[string]string{
-		"list":     s.do(t, "GET", "/admin/users", nil, cookie).Body.String(),
-		"delete":   s.do(t, "GET", "/admin/users/"+itoa(u.ID)+"/delete", nil, cookie).Body.String(),
-		"password": s.do(t, "POST", "/admin/users", url.Values{"email": {"n@x.com"}}, cookie).Body.String(),
-		"account":  s.do(t, "GET", "/account", nil, cookie).Body.String(),
+		"list":     s.do(t, "GET", "/admin/users", nil, cookie).Body,
+		"delete":   s.do(t, "GET", "/admin/users/"+itoa(u.ID)+"/delete", nil, cookie).Body,
+		"password": s.do(t, "POST", "/admin/users", url.Values{"email": {"n@x.com"}}, cookie).Body,
+		"account":  s.do(t, "GET", "/account", nil, cookie).Body,
 	}
 	onAttr := regexp.MustCompile(`(?i)\son[a-z]+\s*=`)
 	styleAttr := regexp.MustCompile(`(?i)\sstyle\s*=`)

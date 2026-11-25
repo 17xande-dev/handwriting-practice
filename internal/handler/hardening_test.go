@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -51,7 +50,7 @@ func TestSignInRedirectRefusesControlCharacters(t *testing.T) {
 	s.addUser(t, "a@x.com", false)
 	for _, next := range []string{"/%09/evil.example", "/\t/evil", `/\\evil`, "https://evil", "//evil"} {
 		rec := s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}, "next": {next}}, "")
-		if loc := rec.Header().Get("Location"); loc != "/account" {
+		if loc := rec.Header.Get("Location"); loc != "/account" {
 			t.Errorf("next=%q: redirected to %q", next, loc)
 		}
 	}
@@ -64,7 +63,7 @@ func TestSignInRedirectKeepsLegitimateNext(t *testing.T) {
 	s := newAccountServer(t)
 	s.addUser(t, "a@x.com", false)
 	rec := s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}, "next": {"/sheet/arches?x=1"}}, "")
-	if loc := rec.Header().Get("Location"); loc != "/sheet/arches?x=1" {
+	if loc := rec.Header.Get("Location"); loc != "/sheet/arches?x=1" {
 		t.Errorf("redirected to %q", loc)
 	}
 }
@@ -88,13 +87,13 @@ func TestFormBodiesAreCapped(t *testing.T) {
 		if strings.HasPrefix(tc.target, "/account/p") || strings.HasPrefix(tc.target, "/account/sessions") {
 			body = url.Values{"current": {strings.Repeat("p", 9<<10)}}
 		}
-		if rec := s.do(t, "POST", tc.target, body, tc.cookie); rec.Code != http.StatusRequestEntityTooLarge {
-			t.Errorf("%s: status %d, want 413", tc.target, rec.Code)
+		if rec := s.do(t, "POST", tc.target, body, tc.cookie); rec.Status != http.StatusRequestEntityTooLarge {
+			t.Errorf("%s: status %d, want 413", tc.target, rec.Status)
 		}
 	}
 	// A normal form is unaffected.
-	if rec := s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}}, ""); rec.Code != http.StatusSeeOther {
-		t.Errorf("normal sign-in: %d", rec.Code)
+	if rec := s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}}, ""); rec.Status != http.StatusSeeOther {
+		t.Errorf("normal sign-in: %d", rec.Status)
 	}
 }
 
@@ -103,12 +102,12 @@ func TestBadEmailsSkipTheLimiter(t *testing.T) {
 	s := newAccountServer(t)
 	for _, email := range []string{strings.Repeat("a", 250) + "@x.com", "not an email", "Alex <a@x.com>", ""} {
 		rec := s.do(t, "POST", "/account/login", url.Values{"email": {email}, "password": {"whatever password"}}, "")
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("email %.20q: status %d, want 400", email, rec.Code)
+		if rec.Status != http.StatusBadRequest {
+			t.Errorf("email %.20q: status %d, want 400", email, rec.Status)
 		}
 		rec = s.api(t, "POST", "/api/token", fmt.Sprintf(`{"email":%q,"password":"x","label":"l"}`, email), "", "")
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("token with email %.20q: status %d, want 400", email, rec.Code)
+		if rec.Status != http.StatusBadRequest {
+			t.Errorf("token with email %.20q: status %d, want 400", email, rec.Status)
 		}
 	}
 	s.srv.limits.loginEmail.Allow("probe") // exercise the map under the lock
@@ -157,29 +156,14 @@ func TestLoginAccountKeyHashesLongAddress(t *testing.T) {
 func TestIPv6ClientsShareTheirSlash64(t *testing.T) {
 	s := newAccountServer(t)
 	for i := range 10 {
-		r := httptest.NewRequest("POST", "/account/login", strings.NewReader(url.Values{
-			"email": {fmt.Sprintf("u%d@x.com", i)}, "password": {"wrong password!!"},
-		}.Encode()))
-		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		r.RemoteAddr = fmt.Sprintf("[2001:db8:1:2:%x::1]:4000", i+1)
-		s.routes.ServeHTTP(httptest.NewRecorder(), r)
+		s.loginFrom(t, fmt.Sprintf("[2001:db8:1:2:%x::1]:4000", i+1), nil, fmt.Sprintf("u%d@x.com", i))
 	}
-	r := httptest.NewRequest("POST", "/account/login", strings.NewReader(url.Values{
-		"email": {"another@x.com"}, "password": {"wrong password!!"},
-	}.Encode()))
-	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.RemoteAddr = "[2001:db8:1:2:ffff::9]:4000"
-	rec := httptest.NewRecorder()
-	s.routes.ServeHTTP(rec, r)
-	if rec.Code != http.StatusTooManyRequests {
-		t.Errorf("11th address in the /64: status %d, want 429", rec.Code)
+	rec := s.loginFrom(t, "[2001:db8:1:2:ffff::9]:4000", nil, "another@x.com")
+	if rec != http.StatusTooManyRequests {
+		t.Errorf("11th address in the /64: status %d, want 429", rec)
 	}
 	// A different /64 is a different bucket.
-	r.RemoteAddr = "[2001:db8:1:3::9]:4000"
-	r.Body = io.NopCloser(strings.NewReader(url.Values{"email": {"another@x.com"}, "password": {"wrong password!!"}}.Encode()))
-	rec = httptest.NewRecorder()
-	s.routes.ServeHTTP(rec, r)
-	if rec.Code == http.StatusTooManyRequests {
+	if s.loginFrom(t, "[2001:db8:1:3::9]:4000", nil, "another@x.com") == http.StatusTooManyRequests {
 		t.Error("another /64 was limited")
 	}
 }
@@ -190,14 +174,14 @@ func TestSignInIsShedWhenPasswordQueueExpires(t *testing.T) {
 	auth.ExpirePasswordQueueForTest(t)
 	for _, email := range []string{"a@x.com", "unknown@x.com"} {
 		rec := s.do(t, "POST", "/account/login", url.Values{"email": {email}, "password": {testPassword}}, "")
-		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
-			t.Errorf("form (%s): status %d, Retry-After %q", email, rec.Code, rec.Header().Get("Retry-After"))
+		if rec.Status != http.StatusServiceUnavailable || rec.Header.Get("Retry-After") != "5" {
+			t.Errorf("form (%s): status %d, Retry-After %q", email, rec.Status, rec.Header.Get("Retry-After"))
 		}
 	}
 	rec := s.api(t, "POST", "/api/token", fmt.Sprintf(`{"email":"a@x.com","password":%q}`, testPassword), "", "")
-	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" ||
-		!strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") || !strings.Contains(rec.Body.String(), "busy") {
-		t.Errorf("token: status %d, headers %v, body %s", rec.Code, rec.Header(), rec.Body)
+	if rec.Status != http.StatusServiceUnavailable || rec.Header.Get("Retry-After") != "5" ||
+		!strings.HasPrefix(rec.Header.Get("Content-Type"), "application/json") || !strings.Contains(rec.Body, "busy") {
+		t.Errorf("token: status %d, headers %v, body %s", rec.Status, rec.Header, rec.Body)
 	}
 }
 
@@ -211,8 +195,8 @@ func TestAdminPasswordResetIsShedWhenPasswordQueueExpires(t *testing.T) {
 	// verifying a password, which would fail at the same queue deadline.
 	auth.ExpirePasswordQueueForTest(t)
 	rec := s.do(t, "POST", "/admin/users/"+itoa(u.ID)+"/reset", url.Values{}, cookie)
-	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
-		t.Fatalf("admin reset: status %d, Retry-After %q", rec.Code, rec.Header().Get("Retry-After"))
+	if rec.Status != http.StatusServiceUnavailable || rec.Header.Get("Retry-After") != "5" {
+		t.Fatalf("admin reset: status %d, Retry-After %q", rec.Status, rec.Header.Get("Retry-After"))
 	}
 }
 
@@ -279,8 +263,8 @@ func TestSignInRevokesTheSessionItReplaces(t *testing.T) {
 	s.addUser(t, "b@x.com", false)
 	old := s.signIn(t, "a@x.com", testPassword)
 	rec := s.do(t, "POST", "/account/login", url.Values{"email": {"b@x.com"}, "password": {testPassword}}, old)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("second sign-in: %d", rec.Code)
+	if rec.Status != http.StatusSeeOther {
+		t.Fatalf("second sign-in: %d", rec.Status)
 	}
 	if _, _, err := s.accounts.Authenticate(t.Context(), old); err == nil {
 		t.Error("the replaced session still authenticates")
@@ -297,7 +281,7 @@ func TestSignInRevokesTheSessionItReplaces(t *testing.T) {
 // state; an ordinary sign-in page does not.
 func TestSignedOutPageClearsLocalSync(t *testing.T) {
 	s := newAccountServer(t)
-	body := s.do(t, "GET", "/account?notice=signed-out", nil, "").Body.String()
+	body := s.do(t, "GET", "/account?notice=signed-out", nil, "").Body
 	m := regexp.MustCompile(`<script type="module" src="(/static/signout\.js\?v=[0-9a-f]+)"`).FindStringSubmatch(body)
 	if m == nil {
 		t.Fatalf("signed-out page lacks signout.js:\n%s", body)
@@ -306,17 +290,17 @@ func TestSignedOutPageClearsLocalSync(t *testing.T) {
 		t.Error("signed-out notice missing")
 	}
 	res, js := get(t, s.routes, m[1])
-	if res.StatusCode != 200 || !strings.Contains(js, "italic-practice") && len(js) == 0 {
-		t.Errorf("signout.js: %d, %d bytes", res.StatusCode, len(js))
+	if res.Status != 200 || !strings.Contains(js, "italic-practice") && len(js) == 0 {
+		t.Errorf("signout.js: %d, %d bytes", res.Status, len(js))
 	}
-	if body := s.do(t, "GET", "/account", nil, "").Body.String(); strings.Contains(body, "signout.js") {
+	if body := s.do(t, "GET", "/account", nil, "").Body; strings.Contains(body, "signout.js") {
 		t.Error("the plain sign-in page clears sync state")
 	}
 	// Logging out and revoking this browser's own session both land on it.
 	s.addUser(t, "a@x.com", false)
 	cookie := s.signIn(t, "a@x.com", testPassword)
 	rec := s.do(t, "POST", "/account/logout", url.Values{}, cookie)
-	if loc := rec.Header().Get("Location"); loc != "/account?notice=signed-out" {
+	if loc := rec.Header.Get("Location"); loc != "/account?notice=signed-out" {
 		t.Errorf("logout redirects to %q", loc)
 	}
 }
@@ -370,9 +354,9 @@ func TestSignInDoesNotOutliveAPasswordReset(t *testing.T) {
 			}
 			var code int
 			if via == "web" {
-				code = s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}}, "").Code
+				code = s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}}, "").Status
 			} else {
-				code = s.api(t, "POST", "/api/token", fmt.Sprintf(`{"email":"a@x.com","password":%q,"label":"l"}`, testPassword), "", "").Code
+				code = s.api(t, "POST", "/api/token", fmt.Sprintf(`{"email":"a@x.com","password":%q,"label":"l"}`, testPassword), "", "").Status
 			}
 			if code != http.StatusUnauthorized {
 				t.Errorf("sign-in over a reset: %d, want 401", code)

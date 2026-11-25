@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -19,6 +18,8 @@ import (
 	"calligraphy/internal/fonts"
 	"calligraphy/internal/history"
 	"calligraphy/internal/sheets"
+
+	"github.com/17xande-dev/websec/webtest"
 )
 
 func newTestServer(t *testing.T, list []fonts.Font) http.Handler {
@@ -69,13 +70,18 @@ func newAccountServerWithCookieSecure(t *testing.T, secure bool) *testServer {
 	return &testServer{srv: srv, accounts: o.Accounts, routes: srv.Routes(), db: d}
 }
 
-func get(t *testing.T, h http.Handler, target string) (*http.Response, string) {
+// plainClient is a fresh client with no cookies. It sends what httptest's
+// NewRequest sent before (host example.com, no Origin on any method), so the
+// requests the tests make are unchanged by moving them onto webtest.
+func plainClient(t *testing.T, h http.Handler) *webtest.Client {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
-	res := rec.Result()
-	body, _ := io.ReadAll(res.Body)
-	return res, string(body)
+	return webtest.New(t, h, "http://example.com", webtest.NoOrigin())
+}
+
+func get(t *testing.T, h http.Handler, target string) (*webtest.Response, string) {
+	t.Helper()
+	res := plainClient(t, h).Get(target)
+	return res, res.Body
 }
 
 // servedPages is every HTML page the app serves, so the page-wide rules below
@@ -102,8 +108,8 @@ func TestRoutes(t *testing.T) {
 	}
 	for _, c := range cases {
 		res, body := get(t, h, c.path)
-		if res.StatusCode != c.status {
-			t.Errorf("%s: status %d, want %d", c.path, res.StatusCode, c.status)
+		if res.Status != c.status {
+			t.Errorf("%s: status %d, want %d", c.path, res.Status, c.status)
 		}
 		if !strings.Contains(body, c.want) {
 			t.Errorf("%s: body missing %q", c.path, c.want)
@@ -216,8 +222,8 @@ func TestSheetFamiliesInOrder(t *testing.T) {
 func TestFontsPage(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	res, body := get(t, h, "/fonts")
-	if res.StatusCode != 200 {
-		t.Fatalf("/fonts: %d", res.StatusCode)
+	if res.Status != 200 {
+		t.Fatalf("/fonts: %d", res.Status)
 	}
 	for _, g := range fonts.Groups(fonts.Builtin) {
 		if !strings.Contains(body, `data-catalog-group="`+g.Name+`"`) {
@@ -229,8 +235,8 @@ func TestFontsPage(t *testing.T) {
 		t.Fatal("no data-catalogue URL")
 	}
 	res, list := get(t, h, m[1])
-	if res.StatusCode != 200 || !strings.Contains(list, `"family"`) {
-		t.Errorf("%s: %d, %.80q", m[1], res.StatusCode, list)
+	if res.Status != 200 || !strings.Contains(list, `"family"`) {
+		t.Errorf("%s: %d, %.80q", m[1], res.Status, list)
 	}
 }
 
@@ -250,8 +256,8 @@ func TestBundledFontsAreServed(t *testing.T) {
 	}
 	for _, u := range urls {
 		res, font := get(t, h, u[1])
-		if res.StatusCode != 200 || res.Header.Get("Content-Type") != "font/ttf" || len(font) < 100000 {
-			t.Errorf("%s: status %d, type %q, %d bytes", u[1], res.StatusCode, res.Header.Get("Content-Type"), len(font))
+		if res.Status != 200 || res.Header.Get("Content-Type") != "font/ttf" || len(font) < 100000 {
+			t.Errorf("%s: status %d, type %q, %d bytes", u[1], res.Status, res.Header.Get("Content-Type"), len(font))
 		}
 		if !strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
 			t.Errorf("%s: not cached immutably", u[1])
@@ -326,8 +332,8 @@ func TestReferencedAssetsAreServed(t *testing.T) {
 	for _, r := range refs {
 		url := strings.ReplaceAll(r[1], "&amp;", "&")
 		res, _ := get(t, h, url)
-		if res.StatusCode != 200 {
-			t.Errorf("%s: status %d", url, res.StatusCode)
+		if res.Status != 200 {
+			t.Errorf("%s: status %d", url, res.Status)
 		}
 		if !strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
 			t.Errorf("%s: hashed URL not cached immutably", url)
@@ -344,8 +350,8 @@ func TestUnhashedAssetIsNotImmutable(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	for _, u := range []string{"/static/app.js", "/static/app.js?v=stale"} {
 		res, _ := get(t, h, u)
-		if res.StatusCode != 200 || strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
-			t.Errorf("%s: status %d, Cache-Control %q", u, res.StatusCode, res.Header.Get("Cache-Control"))
+		if res.Status != 200 || strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
+			t.Errorf("%s: status %d, Cache-Control %q", u, res.Status, res.Header.Get("Cache-Control"))
 		}
 	}
 }
@@ -353,7 +359,7 @@ func TestUnhashedAssetIsNotImmutable(t *testing.T) {
 func TestUnlistedExtensionIsNotServed(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	for _, u := range []string{"/static/", "/static/../handler.go", "/static/nope.css"} {
-		if res, _ := get(t, h, u); res.StatusCode == 200 {
+		if res, _ := get(t, h, u); res.Status == 200 {
 			t.Errorf("%s served", u)
 		}
 	}
@@ -374,23 +380,18 @@ func TestFontStylesheetCarriesFamilies(t *testing.T) {
 	}
 }
 
-func post(t *testing.T, h http.Handler, target, text string) (*http.Response, string) {
+func post(t *testing.T, h http.Handler, target, text string) (*webtest.Response, string) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(url.Values{"text": {text}}.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	res := rec.Result()
-	body, _ := io.ReadAll(res.Body)
-	return res, string(body)
+	res := plainClient(t, h).PostForm(target, url.Values{"text": {text}})
+	return res, res.Body
 }
 
 func TestCustomWorksheet(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	text := "minimum\nthe quick brown fox jumps over the lazy dog"
 	res, body := post(t, h, "/practice", text)
-	if res.StatusCode != 200 {
-		t.Fatalf("status %d", res.StatusCode)
+	if res.Status != 200 {
+		t.Fatalf("status %d", res.Status)
 	}
 	for _, line := range []string{"minimum", "the quick brown fox jumps", "over the lazy dog"} {
 		if !strings.Contains(body, `<p class="model">`+line+`</p>`) {
@@ -420,8 +421,8 @@ func TestCustomTextNeverInURL(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	for _, u := range []string{"/practice", "/practice?text=hello"} {
 		res, body := get(t, h, u)
-		if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/practice/new" {
-			t.Errorf("GET %s: status %d, Location %q", u, res.StatusCode, res.Header.Get("Location"))
+		if res.Status != http.StatusSeeOther || res.Header.Get("Location") != "/practice/new" {
+			t.Errorf("GET %s: status %d, Location %q", u, res.Status, res.Header.Get("Location"))
 		}
 		if strings.Contains(body, "hello") {
 			t.Errorf("GET %s rendered text from the URL", u)
@@ -447,8 +448,8 @@ func TestCustomWorksheetWithoutTextShowsForm(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	for _, text := range []string{"", "  \n\t "} {
 		res, body := post(t, h, "/practice", text)
-		if res.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(body, `role="alert"`) {
-			t.Errorf("%q: status %d, no error shown", text, res.StatusCode)
+		if res.Status != http.StatusUnprocessableEntity || !strings.Contains(body, `role="alert"`) {
+			t.Errorf("%q: status %d, no error shown", text, res.Status)
 		}
 	}
 }
@@ -456,8 +457,8 @@ func TestCustomWorksheetWithoutTextShowsForm(t *testing.T) {
 func TestCustomRefusesOversizedBody(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	res, _ := post(t, h, "/practice", strings.Repeat("a", maxCustomBody))
-	if res.StatusCode != http.StatusRequestEntityTooLarge {
-		t.Errorf("status %d", res.StatusCode)
+	if res.Status != http.StatusRequestEntityTooLarge {
+		t.Errorf("status %d", res.Status)
 	}
 }
 
@@ -479,15 +480,15 @@ func TestCustomTextIsEscaped(t *testing.T) {
 func TestProgressPageLoadsItsOwnBundle(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	res, body := get(t, h, "/progress")
-	if res.StatusCode != 200 || !strings.Contains(body, `id="progress"`) {
-		t.Fatalf("status %d", res.StatusCode)
+	if res.Status != 200 || !strings.Contains(body, `id="progress"`) {
+		t.Fatalf("status %d", res.Status)
 	}
 	m := regexp.MustCompile(`src="(/static/progress\.js\?v=[0-9a-f]+)"`).FindStringSubmatch(body)
 	if m == nil {
 		t.Fatal("progress page doesn't load progress.js")
 	}
-	if r, _ := get(t, h, m[1]); r.StatusCode != 200 {
-		t.Errorf("%s: status %d", m[1], r.StatusCode)
+	if r, _ := get(t, h, m[1]); r.Status != 200 {
+		t.Errorf("%s: status %d", m[1], r.Status)
 	}
 	if _, sheet := get(t, h, "/sheet/arches"); strings.Contains(sheet, "progress.js") {
 		t.Error("worksheet loads the progress bundle")
@@ -526,14 +527,14 @@ func TestAccountAndAdminPagesAreCSPClean(t *testing.T) {
 	}
 	for _, p := range pages {
 		rec := s.do(t, p.method, p.path, url.Values{}, p.cookie)
-		if rec.Code != http.StatusOK {
-			t.Errorf("%s %s: status %d", p.method, p.path, rec.Code)
+		if rec.Status != http.StatusOK {
+			t.Errorf("%s %s: status %d", p.method, p.path, rec.Status)
 			continue
 		}
-		if got := rec.Header().Get("Content-Security-Policy"); got != want {
+		if got := rec.Header.Get("Content-Security-Policy"); got != want {
 			t.Errorf("%s: CSP %q, want the site policy %q", p.path, got, want)
 		}
-		body := rec.Body.String()
+		body := rec.Body
 		for name, re := range map[string]*regexp.Regexp{
 			"style attribute": inlineStyle, "event handler": inlineHandler,
 			"inline script": inlineScript, "style element": styleElement,
@@ -568,7 +569,7 @@ func TestHSTSOnlyWhenConfigured(t *testing.T) {
 func TestAdminResponsesAreNotIndexedOrCached(t *testing.T) {
 	s := newAccountServer(t)
 	for _, p := range []string{"/admin/users", "/admin/nope"} {
-		h := s.do(t, "GET", p, nil, "").Header()
+		h := s.do(t, "GET", p, nil, "").Header
 		if h.Get("X-Robots-Tag") != "noindex" || h.Get("Cache-Control") != "no-store" {
 			t.Errorf("%s: X-Robots-Tag %q, Cache-Control %q", p, h.Get("X-Robots-Tag"), h.Get("Cache-Control"))
 		}
@@ -581,8 +582,8 @@ func TestStrokeModelsAreServed(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	for _, id := range []string{"italic", "briem-print"} {
 		res, body := get(t, h, "/static/strokes/"+id+".json")
-		if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
-			t.Errorf("%s: status %d, type %q", id, res.StatusCode, res.Header.Get("Content-Type"))
+		if res.Status != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
+			t.Errorf("%s: status %d, type %q", id, res.Status, res.Header.Get("Content-Type"))
 		}
 		var f struct {
 			V         int                        `json:"v"`
@@ -598,12 +599,12 @@ func TestStrokeModelsAreServed(t *testing.T) {
 		}
 	}
 	res, body := get(t, h, "/static/strokes/NOTICE")
-	if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/plain") ||
+	if res.Status != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/plain") ||
 		!strings.Contains(body, "SIL OPEN FONT LICENSE") {
-		t.Errorf("NOTICE: status %d, type %q", res.StatusCode, res.Header.Get("Content-Type"))
+		t.Errorf("NOTICE: status %d, type %q", res.Status, res.Header.Get("Content-Type"))
 	}
 	// Only the listed names are served: a stray file next to them is not.
-	if res, _ := get(t, h, "/static/strokes/README"); res.StatusCode == 200 {
+	if res, _ := get(t, h, "/static/strokes/README"); res.Status == 200 {
 		t.Error("an unlisted file under strokes/ is served")
 	}
 }
@@ -613,15 +614,15 @@ func TestStrokeModelsAreServed(t *testing.T) {
 func TestStrokesPage(t *testing.T) {
 	h := newTestServer(t, fonts.Builtin)
 	res, body := get(t, h, "/strokes")
-	if res.StatusCode != 200 || !strings.Contains(body, `id="strokes"`) {
-		t.Fatalf("/strokes: %d", res.StatusCode)
+	if res.Status != 200 || !strings.Contains(body, `id="strokes"`) {
+		t.Fatalf("/strokes: %d", res.Status)
 	}
 	m := regexp.MustCompile(`src="(/static/strokes\.js\?v=[0-9a-f]+)"`).FindStringSubmatch(body)
 	if m == nil {
 		t.Fatal("strokes page doesn't load strokes.js")
 	}
-	if res, js := get(t, h, m[1]); res.StatusCode != 200 || len(js) < 1000 {
-		t.Errorf("strokes.js: %d, %d bytes", res.StatusCode, len(js))
+	if res, js := get(t, h, m[1]); res.Status != 200 || len(js) < 1000 {
+		t.Errorf("strokes.js: %d, %d bytes", res.Status, len(js))
 	}
 	if _, sheet := get(t, h, "/sheet/arches"); strings.Contains(sheet, "strokes.js") {
 		t.Error("worksheet loads the strokes bundle")

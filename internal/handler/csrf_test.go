@@ -182,12 +182,12 @@ func TestEmptyBearerDoesNotFallBackToCookie(t *testing.T) {
 // an empty value or a repeated header reaches the handler as written.
 func (s *testServer) meWith(t *testing.T, cookie string, authorization ...string) int {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	r.Header["Authorization"] = authorization
-	r.AddCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie})
-	rec := httptest.NewRecorder()
-	s.routes.ServeHTTP(rec, r)
-	return rec.Code
+	c := plainClient(t, s.routes)
+	c.SetCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie, Path: "/"})
+	req := c.NewRequest(http.MethodGet, "/api/me", nil)
+	// An option can set only one value, so the values are written as given:
+	// an empty one and a repeated header both reach the handler.
+	return c.Do(req, func(r *http.Request) { r.Header["Authorization"] = authorization }).Status
 }
 
 // Any Authorization header means a device request: the cookie is used only
@@ -303,11 +303,5 @@ func TestTabSeparatedBearerAuthenticates(t *testing.T) {
 	s := newAccountServer(t)
 	s.addUser(t, "member@example.com", false)
 	token := s.deviceToken(t, "member@example.com", testPassword)
-	r := httptest.NewRequest(http.MethodGet, "/api/me", nil)
-	r.Header.Set("Authorization", "Bearer\t"+token)
-	rec := httptest.NewRecorder()
-	s.routes.ServeHTTP(rec, r)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status %d, want 200", rec.Code)
-	}
+	plainClient(t, s.routes).Get("/api/me", webtest.Header("Authorization", "Bearer\t"+token)).WantStatus(http.StatusOK)
 }

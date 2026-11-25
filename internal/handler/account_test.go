@@ -32,38 +32,33 @@ func (s *testServer) addUser(t *testing.T, email string, admin bool) account.Use
 	return u
 }
 
-// do sends a request, with the session cookie when one is given.
-func (s *testServer) do(t *testing.T, method, target string, form url.Values, cookie string) *httptest.ResponseRecorder {
+// do sends a request, with the session cookie when one is given. Every call
+// is a fresh client holding only that cookie, as the recorder helper it
+// replaced was; the request is the same (host example.com, no Origin).
+func (s *testServer) do(t *testing.T, method, target string, form url.Values, cookie string) *webtest.Response {
 	t.Helper()
-	var r *http.Request
-	if form != nil {
-		r = httptest.NewRequest(method, target, strings.NewReader(form.Encode()))
-		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	} else {
-		r = httptest.NewRequest(method, target, nil)
-	}
+	c := plainClient(t, s.routes)
 	if cookie != "" {
-		r.AddCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie})
+		c.SetCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie, Path: "/"})
 	}
-	rec := httptest.NewRecorder()
-	s.routes.ServeHTTP(rec, r)
-	return rec
+	if form == nil {
+		return c.Do(c.NewRequest(method, target, nil))
+	}
+	req := c.NewRequest(method, target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return c.Do(req)
 }
 
 // signIn signs in through the form and returns the session cookie's value.
 func (s *testServer) signIn(t *testing.T, email, password string) string {
 	t.Helper()
-	rec := s.do(t, "POST", "/account/login", url.Values{"email": {email}, "password": {password}}, "")
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("sign in as %s: status %d", email, rec.Code)
+	res := s.do(t, "POST", "/account/login", url.Values{"email": {email}, "password": {password}}, "")
+	res.WantStatus(http.StatusSeeOther)
+	c := res.SetCookie(s.srv.session.Name())
+	if c.Value == "" {
+		t.Fatal("no session cookie set")
 	}
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == s.srv.session.Name() && c.Value != "" {
-			return c.Value
-		}
-	}
-	t.Fatal("no session cookie set")
-	return ""
+	return c.Value
 }
 
 func TestSignInAndOut(t *testing.T) {
@@ -71,17 +66,17 @@ func TestSignInAndOut(t *testing.T) {
 	s.addUser(t, "a@x.com", false)
 	cookie := s.signIn(t, "A@X.com", testPassword)
 
-	body := s.do(t, "GET", "/account", nil, cookie).Body.String()
+	body := s.do(t, "GET", "/account", nil, cookie).Body
 	if !strings.Contains(body, "a@x.com") || !strings.Contains(body, "(this browser)") {
 		t.Fatal("account page does not show the signed-in user and session")
 	}
 	rec := s.do(t, "POST", "/account/logout", url.Values{}, cookie)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("logout: %d", rec.Code)
+	if rec.Status != http.StatusSeeOther {
+		t.Fatalf("logout: %d", rec.Status)
 	}
 	// The token itself must be dead, not just the cookie cleared: a copied
 	// cookie must not outlive signing out.
-	if body := s.do(t, "GET", "/account", nil, cookie).Body.String(); !strings.Contains(body, `action="/account/login"`) {
+	if body := s.do(t, "GET", "/account", nil, cookie).Body; !strings.Contains(body, `action="/account/login"`) {
 		t.Error("session still valid after sign-out")
 	}
 }
@@ -235,20 +230,21 @@ func TestBareNamedSessionCookieIsIgnored(t *testing.T) {
 	s.addUser(t, "a@x.com", false)
 	valid := s.signIn(t, "a@x.com", testPassword)
 	for _, target := range []string{"/account", "/api/me"} {
-		get := func(name string) *httptest.ResponseRecorder {
-			r := httptest.NewRequest("GET", "https://app.example"+target, nil)
-			r.AddCookie(&http.Cookie{Name: name, Value: valid})
-			w := httptest.NewRecorder()
-			s.routes.ServeHTTP(w, r)
-			return w
+		// Each request is a fresh browser holding one cookie under the name
+		// given (webtest's jar does not enforce prefixes, so the bare name is
+		// sent as written), on the https origin the recorder request used.
+		get := func(name string) *webtest.Response {
+			c := webtest.New(t, s.routes, "https://app.example", webtest.NoOrigin())
+			c.SetCookie(&http.Cookie{Name: name, Value: valid, Path: "/", Secure: true})
+			return c.Get(target)
 		}
-		if w := get("__Host-hp_session"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "a@x.com") {
-			t.Errorf("%s: prefixed cookie failed authentication (status %d)", target, w.Code)
+		if w := get("__Host-hp_session"); w.Status != http.StatusOK || !strings.Contains(w.Body, "a@x.com") {
+			t.Errorf("%s: prefixed cookie failed authentication (status %d)", target, w.Status)
 		}
 		w := get("hp_session")
-		if target == "/api/me" && w.Code != http.StatusUnauthorized ||
-			target == "/account" && (w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `action="/account/login"`)) {
-			t.Errorf("%s: bare cookie did not get the signed-out response (status %d)", target, w.Code)
+		if target == "/api/me" && w.Status != http.StatusUnauthorized ||
+			target == "/account" && (w.Status != http.StatusOK || !strings.Contains(w.Body, `action="/account/login"`)) {
+			t.Errorf("%s: bare cookie did not get the signed-out response (status %d)", target, w.Status)
 		}
 	}
 }
@@ -273,14 +269,14 @@ func TestFailedSignInsAreIndistinguishable(t *testing.T) {
 		{"broken@x.com", testPassword},
 	} {
 		rec := s.do(t, "POST", "/account/login", url.Values{"email": {tc.email}, "password": {tc.pw}}, "")
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("%s: status %d", tc.email, rec.Code)
+		if rec.Status != http.StatusUnauthorized {
+			t.Errorf("%s: status %d", tc.email, rec.Status)
 		}
-		if len(rec.Result().Cookies()) != 0 {
+		if len(rec.Header.Values("Set-Cookie")) != 0 {
 			t.Errorf("%s: a cookie was set", tc.email)
 		}
 		// Compare the message, with the echoed email taken out.
-		body := strings.ReplaceAll(rec.Body.String(), tc.email, "")
+		body := strings.ReplaceAll(rec.Body, tc.email, "")
 		if first == "" {
 			first = body
 		} else if body != first {
@@ -301,8 +297,8 @@ func TestSignInIsRateLimitedPerEmail(t *testing.T) {
 	// Even the right password is refused once the bucket is empty, and
 	// changing the email's case does not buy a fresh bucket.
 	rec := s.do(t, "POST", "/account/login", url.Values{"email": {" A@x.com "}, "password": {testPassword}}, "")
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status %d, want 429", rec.Code)
+	if rec.Status != http.StatusTooManyRequests {
+		t.Fatalf("status %d, want 429", rec.Status)
 	}
 }
 
@@ -317,7 +313,7 @@ func TestSignInRedirectStaysOnSite(t *testing.T) {
 		"https://evil.example": "/account",
 	} {
 		rec := s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}, "next": {next}}, "")
-		if loc := rec.Header().Get("Location"); loc != want {
+		if loc := rec.Header.Get("Location"); loc != want {
 			t.Errorf("next=%q: redirected to %q, want %q", next, loc, want)
 		}
 	}
@@ -331,7 +327,7 @@ func TestChangePassword(t *testing.T) {
 
 	change := func(current, next, confirm string) string {
 		rec := s.do(t, "POST", "/account/password", url.Values{"current": {current}, "new": {next}, "confirm": {confirm}}, cookie)
-		return rec.Header().Get("Location")
+		return rec.Header.Get("Location")
 	}
 	if loc := change("wrong one entirely", "another long password", "another long password"); !strings.Contains(loc, "error=wrong-password") {
 		t.Errorf("wrong current password: %s", loc)
@@ -346,10 +342,10 @@ func TestChangePassword(t *testing.T) {
 		t.Fatalf("change: %s", loc)
 	}
 	// This browser stays signed in; every other session is ended.
-	if !strings.Contains(s.do(t, "GET", "/account", nil, cookie).Body.String(), "Change password") {
+	if !strings.Contains(s.do(t, "GET", "/account", nil, cookie).Body, "Change password") {
 		t.Error("the changing session was signed out")
 	}
-	if !strings.Contains(s.do(t, "GET", "/account", nil, other).Body.String(), `action="/account/login"`) {
+	if !strings.Contains(s.do(t, "GET", "/account", nil, other).Body, `action="/account/login"`) {
 		t.Error("another session survived the change")
 	}
 	s.signIn(t, "a@x.com", "another long password")
@@ -364,8 +360,8 @@ func TestRevokeOtherSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := s.do(t, "POST", "/account/sessions/"+itoa(dev.ID)+"/revoke", url.Values{}, cookie)
-	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "notice=revoked") {
-		t.Fatalf("revoke: %d %s", rec.Code, loc)
+	if loc := rec.Header.Get("Location"); !strings.Contains(loc, "notice=revoked") {
+		t.Fatalf("revoke: %d %s", rec.Status, loc)
 	}
 	if _, _, err := s.accounts.Authenticate(t.Context(), tok); err == nil {
 		t.Error("revoked device still signed in")
@@ -404,11 +400,11 @@ func TestEveryRouteIsPublicOrProtected(t *testing.T) {
 		path = strings.NewReplacer("{id}", "1", "{$}", "").Replace(path)
 		for _, cookie := range []string{"", "made-up-token"} {
 			rec := s.do(t, method, path, url.Values{"current": {"x"}, "new": {"y"}, "confirm": {"y"}}, cookie)
-			loc := rec.Header().Get("Location")
-			refused := rec.Code == http.StatusUnauthorized ||
-				(rec.Code == http.StatusSeeOther && strings.HasPrefix(loc, "/account"))
+			loc := rec.Header.Get("Location")
+			refused := rec.Status == http.StatusUnauthorized ||
+				(rec.Status == http.StatusSeeOther && strings.HasPrefix(loc, "/account"))
 			if !refused {
-				t.Errorf("%s (cookie %q): %d %s", pattern, cookie, rec.Code, loc)
+				t.Errorf("%s (cookie %q): %d %s", pattern, cookie, rec.Status, loc)
 			}
 		}
 		checked++
@@ -424,15 +420,14 @@ func TestCrossOriginPostIsRefused(t *testing.T) {
 	s := newAccountServer(t)
 	s.addUser(t, "a@x.com", false)
 	cookie := s.signIn(t, "a@x.com", testPassword)
-	r := httptest.NewRequest("POST", "/account/logout", strings.NewReader(""))
-	r.Header.Set("Sec-Fetch-Site", "cross-site")
-	r.AddCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie})
-	rec := httptest.NewRecorder()
-	s.routes.ServeHTTP(rec, r)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("cross-site POST: status %d", rec.Code)
+	// Only Sec-Fetch-Site is sent, as before; plainClient adds no Origin.
+	c := plainClient(t, s.routes)
+	c.SetCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie, Path: "/"})
+	rec := c.PostForm("/account/logout", url.Values{}, webtest.SecFetchSite("cross-site"))
+	if rec.Status != http.StatusForbidden {
+		t.Fatalf("cross-site POST: status %d", rec.Status)
 	}
-	if !strings.Contains(s.do(t, "GET", "/account", nil, cookie).Body.String(), "Sign out") {
+	if !strings.Contains(s.do(t, "GET", "/account", nil, cookie).Body, "Sign out") {
 		t.Error("the cross-site POST signed the user out")
 	}
 }
@@ -441,7 +436,7 @@ func TestCrossOriginPostIsRefused(t *testing.T) {
 // on a shared computer must not keep them.
 func TestAccountPageIsNoStore(t *testing.T) {
 	s := newAccountServer(t)
-	if cc := s.do(t, "GET", "/account", nil, "").Header().Get("Cache-Control"); cc != "no-store" {
+	if cc := s.do(t, "GET", "/account", nil, "").Header.Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("Cache-Control %q", cc)
 	}
 }
