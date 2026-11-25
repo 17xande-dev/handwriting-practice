@@ -137,7 +137,11 @@ func (s *Server) apiToken(w http.ResponseWriter, r *http.Request) {
 	if label == "" {
 		label = "An app"
 	}
-	token, _, err := s.accounts.CreateSession(r.Context(), u.ID, account.KindDevice, label)
+	token, _, err := s.accounts.SignIn(r.Context(), u, account.KindDevice, label)
+	if errors.Is(err, account.ErrStaleCredentials) {
+		apiError(w, http.StatusUnauthorized, loginFailed)
+		return
+	}
 	if err != nil {
 		s.serverError(w, err)
 		return

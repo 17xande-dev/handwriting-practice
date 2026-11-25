@@ -206,6 +206,32 @@ func TestDeleteCascades(t *testing.T) {
 	}
 }
 
+// Model a reset or disable between verification and insertion without relying
+// on goroutine scheduling to hit that interleaving.
+func TestSignInRefusesStaleCredentials(t *testing.T) {
+	s := newStore(t)
+	u := mustCreate(t, s, "a@x.com", false)
+	if _, _, err := s.SignIn(ctx, u, KindWeb, ""); err != nil {
+		t.Fatalf("fresh sign-in: %v", err)
+	}
+	if err := s.SetPassword(ctx, u.ID, "new-hash", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.SignIn(ctx, u, KindWeb, ""); !errors.Is(err, ErrStaleCredentials) {
+		t.Errorf("sign-in with the replaced hash: %v, want ErrStaleCredentials", err)
+	}
+	cur, err := s.ByID(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDisabled(ctx, cur.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.SignIn(ctx, cur, KindDevice, ""); !errors.Is(err, ErrStaleCredentials) {
+		t.Errorf("sign-in on a disabled account: %v, want ErrStaleCredentials", err)
+	}
+}
+
 // A device label is cut at 100 characters, never inside a multi-byte rune.
 func TestSessionLabelTruncatesByRunes(t *testing.T) {
 	s := newStore(t)

@@ -272,7 +272,8 @@ All bodies are JSON. Errors are `{"error": "message"}` with a 4xx/5xx status. Ev
 
 - `200` `{"token": "…", "email": "a@example.com"}`. Store the token in the Keychain. The label is
   what the account page's device list shows (100 characters at most).
-- `401` for every failure: unknown email, wrong password or disabled account. The message is always
+- `401` for invalid credentials: unknown email, wrong password, disabled account, or credentials
+  changed while signing in. The message is always
   the same.
 - `400` when `email` is not a bare address (after trimming and lower-casing) or is over 254 bytes.
   This is decided before the rate limiter, so it does not count as an attempt.

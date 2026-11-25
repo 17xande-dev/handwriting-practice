@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"time"
 
 	"calligraphy/internal/auth"
@@ -36,9 +37,15 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
-// CreateSession signs a user in and returns the token to hand to the client.
-// Only the token's hash is stored.
-func (s *Store) CreateSession(ctx context.Context, userID int64, kind, label string) (string, Session, error) {
+// SignIn returns a token whose hash is stored only if the verified password
+// hash is still current and the account is enabled. The guard and insert
+// share a statement so a concurrent password reset or disable cannot leave
+// a new session behind. It returns ErrStaleCredentials if the guard fails.
+func (s *Store) SignIn(ctx context.Context, u User, kind, label string) (string, Session, error) {
+	return s.createSession(ctx, u.ID, u.PasswordHash, true, kind, label)
+}
+
+func (s *Store) createSession(ctx context.Context, userID int64, verifiedHash string, guard bool, kind, label string) (string, Session, error) {
 	token := auth.NewToken()
 	now := s.now()
 	var expires time.Time
@@ -49,12 +56,25 @@ func (s *Store) CreateSession(ctx context.Context, userID int64, kind, label str
 	if r := []rune(label); len(r) > 100 {
 		label = string(r[:100])
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO auth_sessions
-		(token_hash, user_id, kind, label, created_at, last_used_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		auth.HashToken(token), userID, kind, label, timestamp(now), timestamp(now), timestamp(expires))
+	var res sql.Result
+	var err error
+	if guard {
+		res, err = s.db.ExecContext(ctx, `INSERT INTO auth_sessions
+			(token_hash, user_id, kind, label, created_at, last_used_at, expires_at)
+			SELECT ?, id, ?, ?, ?, ?, ? FROM users
+			WHERE id = ? AND password_hash = ? AND disabled = 0`,
+			auth.HashToken(token), kind, label, timestamp(now), timestamp(now), timestamp(expires), userID, verifiedHash)
+	} else {
+		res, err = s.db.ExecContext(ctx, `INSERT INTO auth_sessions
+			(token_hash, user_id, kind, label, created_at, last_used_at, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			auth.HashToken(token), userID, kind, label, timestamp(now), timestamp(now), timestamp(expires))
+	}
 	if err != nil {
 		return "", Session{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", Session{}, ErrStaleCredentials
 	}
 	id, _ := res.LastInsertId()
 	return token, Session{ID: id, UserID: userID, Kind: kind, Label: label, CreatedAt: now, LastUsedAt: now, ExpiresAt: expires}, nil
@@ -82,7 +102,10 @@ func (s *Store) Authenticate(ctx context.Context, token string) (User, Session, 
 	sess.CreatedAt, sess.LastUsedAt, sess.ExpiresAt = parseTime(created), parseTime(lastUsed), parseTime(expires)
 	now := s.now()
 	if !sess.ExpiresAt.IsZero() && !now.Before(sess.ExpiresAt) {
-		s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE id = ?`, sess.ID)
+		// Expiry decides the result even if the best-effort cleanup fails.
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE id = ?`, sess.ID); err != nil {
+			slog.ErrorContext(ctx, "delete expired session", "err", err)
+		}
 		return User{}, Session{}, ErrNotFound
 	}
 	if now.Sub(sess.LastUsedAt) >= touchInterval {
@@ -90,8 +113,10 @@ func (s *Store) Authenticate(ctx context.Context, token string) (User, Session, 
 			sess.ExpiresAt = now.Add(WebSessionTTL)
 		}
 		sess.LastUsedAt = now
-		s.db.ExecContext(ctx, `UPDATE auth_sessions SET last_used_at = ?, expires_at = ? WHERE id = ?`,
-			timestamp(now), timestamp(sess.ExpiresAt), sess.ID)
+		if _, err := s.db.ExecContext(ctx, `UPDATE auth_sessions SET last_used_at = ?, expires_at = ? WHERE id = ?`,
+			timestamp(now), timestamp(sess.ExpiresAt), sess.ID); err != nil {
+			slog.ErrorContext(ctx, "touch session", "err", err)
+		}
 	}
 	u, err := s.ByID(ctx, sess.UserID)
 	if err != nil {

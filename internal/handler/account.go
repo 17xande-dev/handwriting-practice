@@ -166,8 +166,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	token, _, err := s.accounts.CreateSession(r.Context(), u.ID, account.KindWeb, browserLabel(r.UserAgent()))
+	token, _, err := s.accounts.SignIn(r.Context(), u, account.KindWeb, browserLabel(r.UserAgent()))
 	if err != nil {
+		if errors.Is(err, account.ErrStaleCredentials) {
+			fail(http.StatusUnauthorized, loginFailed)
+			return
+		}
 		s.serverError(w, err)
 		return
 	}
