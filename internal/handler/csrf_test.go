@@ -261,3 +261,44 @@ func TestCrossOriginRefusalLogDoesNotLeak(t *testing.T) {
 		})
 	}
 }
+
+func TestBearerParsing(t *testing.T) {
+	for _, tc := range []struct {
+		name, header, token string
+		present             bool
+	}{
+		{name: "absent"},
+		{name: "other scheme", header: "Basic value"},
+		{name: "bare scheme", header: "Bearer", present: true},
+		{name: "one trailing space", header: "Bearer ", present: true},
+		{name: "mixed case and trailing whitespace", header: "bEaReR  \t", present: true},
+		{name: "valid", header: "bEaReR token ", token: "token", present: true},
+		{name: "tab separator", header: "Bearer\ttoken", token: "token", present: true},
+		{name: "space then tab", header: "Bearer \t token", token: "token", present: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+			if tc.header != "" {
+				r.Header.Set("Authorization", tc.header)
+			}
+			if token, present := bearer(r); token != tc.token || present != tc.present {
+				t.Fatalf("bearer(%q) = %q, %t; want %q, %t", tc.header, token, present, tc.token, tc.present)
+			}
+		})
+	}
+}
+
+// Over the handler: a tab-separated live token authenticates, as the twin's
+// parser does, instead of being read as "no Bearer" and falling to the cookie.
+func TestTabSeparatedBearerAuthenticates(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "member@example.com", false)
+	token := s.deviceToken(t, "member@example.com", testPassword)
+	r := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	r.Header.Set("Authorization", "Bearer\t"+token)
+	rec := httptest.NewRecorder()
+	s.routes.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", rec.Code)
+	}
+}

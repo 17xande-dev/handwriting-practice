@@ -41,13 +41,18 @@ func apiError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// bearer distinguishes an empty Bearer credential from an absent one.
+// bearer distinguishes an empty Bearer credential from an absent one. The
+// scheme and the token may be separated by a space or a tab.
 func bearer(r *http.Request) (token string, present bool) {
-	scheme, token, _ := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
+	value := strings.TrimSpace(r.Header.Get("Authorization"))
+	scheme := value
+	if i := strings.IndexAny(value, " \t"); i >= 0 {
+		scheme, token = value[:i], strings.TrimSpace(value[i:])
+	}
 	if !strings.EqualFold(scheme, "Bearer") {
 		return "", false
 	}
-	return strings.TrimSpace(token), true
+	return token, true
 }
 
 // errNotSignedIn means the request has no live credentials (401). Any other
