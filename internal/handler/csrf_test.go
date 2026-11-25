@@ -321,3 +321,40 @@ func TestTabSeparatedBearerAuthenticates(t *testing.T) {
 	token := s.deviceToken(t, "member@example.com", testPassword)
 	plainClient(t, s.routes).Get("/api/me", webtest.Header("Authorization", "Bearer\t"+token)).WantStatus(http.StatusOK)
 }
+
+// A refused request costs the server nothing: the cross-origin layer, and the
+// sign-in redirect or 401 for a request with no session, answer before any
+// handler reads the body. The body is 1 MiB of filler that a client would
+// stream for as long as the server kept reading, and the counter sees every
+// byte taken. (A logged-out sign-in or token request reads its body by design
+// and is not here.)
+func TestRefusalsReadNoBody(t *testing.T) {
+	s := newAccountServer(t)
+	for _, tc := range []struct {
+		name, path, contentType string
+		opts                    []webtest.Option
+		want                    int
+	}{
+		{"cross-site sign-in", "/account/login", "application/x-www-form-urlencoded",
+			[]webtest.Option{webtest.SecFetchSite("cross-site")}, http.StatusForbidden},
+		{"cross-site sync", "/api/sync", "application/json",
+			[]webtest.Option{webtest.SecFetchSite("cross-site")}, http.StatusForbidden},
+		{"cross-site admin form", "/admin/users", "application/x-www-form-urlencoded",
+			[]webtest.Option{webtest.SecFetchSite("cross-site")}, http.StatusForbidden},
+		{"wrong Origin", "/api/sync", "application/json",
+			[]webtest.Option{webtest.WithOrigin("https://elsewhere.example")}, http.StatusForbidden},
+		{"no session, sync", "/api/sync", "application/json", nil, http.StatusUnauthorized},
+		{"no session, admin form", "/admin/users", "application/x-www-form-urlencoded", nil, http.StatusSeeOther},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := webtest.NewCountingReader(webtest.Filler(1 << 20))
+			c := webtest.New(t, s.routes, csrfTestOrigin, append([]webtest.Option{webtest.NoOrigin()}, tc.opts...)...)
+			req := c.NewRequest(http.MethodPost, tc.path, body)
+			req.Header.Set("Content-Type", tc.contentType)
+			c.Do(req).WantStatus(tc.want)
+			if n := body.N(); n != 0 {
+				t.Fatalf("the refusal read %d body bytes, want 0", n)
+			}
+		})
+	}
+}
