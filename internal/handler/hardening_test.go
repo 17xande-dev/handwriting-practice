@@ -349,3 +349,38 @@ func TestRefusedByIPLeavesNoEmailBucket(t *testing.T) {
 		t.Errorf("the email limiter holds %d buckets after 40 attempts from one address, want about 10", n)
 	}
 }
+
+// A sign-in whose password check passed, then overlapped a password reset
+// (which deletes sessions), must answer 401 and must not end up holding a
+// session. A 500 would make the iPad treat a credential change as a server
+// fault instead of asking for the new password.
+func TestSignInDoesNotOutliveAPasswordReset(t *testing.T) {
+	for _, via := range []string{"web", "token"} {
+		t.Run(via, func(t *testing.T) {
+			s := newAccountServer(t)
+			u := s.addUser(t, "a@x.com", false)
+			hash, err := auth.HashPassword(t.Context(), "a brand new password")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.srv.afterVerify = func() {
+				if err := s.accounts.SetPassword(t.Context(), u.ID, hash, 0); err != nil {
+					t.Error(err)
+				}
+			}
+			var code int
+			if via == "web" {
+				code = s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}}, "").Code
+			} else {
+				code = s.api(t, "POST", "/api/token", fmt.Sprintf(`{"email":"a@x.com","password":%q,"label":"l"}`, testPassword), "", "").Code
+			}
+			if code != http.StatusUnauthorized {
+				t.Errorf("sign-in over a reset: %d, want 401", code)
+			}
+			var n int
+			if err := s.db.QueryRow(`SELECT count(*) FROM auth_sessions WHERE user_id = ?`, u.ID).Scan(&n); err != nil || n != 0 {
+				t.Errorf("%d sessions after the racing sign-in (err %v), want 0", n, err)
+			}
+		})
+	}
+}

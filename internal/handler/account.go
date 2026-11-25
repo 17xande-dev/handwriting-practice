@@ -234,6 +234,9 @@ func (s *Server) checkPassword(r *http.Request, email, pw string) (account.User,
 	if u.Disabled {
 		return bad("disabled")
 	}
+	if s.afterVerify != nil {
+		s.afterVerify()
+	}
 	return u, rehash, nil
 }
 

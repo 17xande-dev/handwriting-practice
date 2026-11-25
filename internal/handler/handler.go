@@ -68,6 +68,10 @@ type Server struct {
 	limits   limits
 	session  *cookie.Cookie
 	handler  http.Handler
+
+	// afterVerify, when set, runs between a sign-in's password check and its
+	// session insert; tests use it to land a password reset in that window.
+	afterVerify func()
 }
 
 // limits are the rate limits on everything that verifies a password. Each
