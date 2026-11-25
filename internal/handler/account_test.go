@@ -7,11 +7,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"calligraphy/internal/account"
 	"calligraphy/internal/auth"
 
 	"github.com/17xande-dev/password"
+	"github.com/17xande-dev/websec/webtest"
 )
 
 const testPassword = "a long enough password"
@@ -41,7 +43,7 @@ func (s *testServer) do(t *testing.T, method, target string, form url.Values, co
 		r = httptest.NewRequest(method, target, nil)
 	}
 	if cookie != "" {
-		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+		r.AddCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie})
 	}
 	rec := httptest.NewRecorder()
 	s.routes.ServeHTTP(rec, r)
@@ -56,7 +58,7 @@ func (s *testServer) signIn(t *testing.T, email, password string) string {
 		t.Fatalf("sign in as %s: status %d", email, rec.Code)
 	}
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == sessionCookie && c.Value != "" {
+		if c.Name == s.srv.session.Name() && c.Value != "" {
 			return c.Value
 		}
 	}
@@ -178,15 +180,76 @@ func (s *testServer) signInLegacy(t *testing.T, via string) account.User {
 func TestSessionCookieAttributes(t *testing.T) {
 	s := newAccountServer(t)
 	s.addUser(t, "a@x.com", false)
-	rec := s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}}, "")
-	var c *http.Cookie
-	for _, x := range rec.Result().Cookies() {
-		if x.Name == sessionCookie {
-			c = x
-		}
+	srv := httptest.NewTLSServer(s.routes)
+	t.Cleanup(srv.Close)
+	browser := webtest.NewServer(t, srv)
+	want := webtest.CookieWant{
+		Name: "__Host-hp_session", Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode,
 	}
-	if c == nil || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode || c.Path != "/" {
-		t.Fatalf("cookie = %+v", c)
+	login := browser.PostForm("/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}})
+	login.WantRedirect(http.StatusSeeOther, "/account")
+	c := webtest.WantCookie(t, login, want)
+	_, sess, err := s.accounts.Authenticate(t.Context(), c.Value)
+	if err != nil {
+		t.Fatal("cannot authenticate the issued token:", err)
+	}
+	maxAge := int((90 * 24 * time.Hour).Seconds())
+	// Set floors the time between issuance and writing the cookie.
+	if c.MaxAge > maxAge || c.MaxAge < maxAge-2 || !c.Expires.Equal(sess.CreatedAt.Add(90*24*time.Hour)) {
+		t.Errorf("Max-Age=%d Expires=%v, want 90 days from creation", c.MaxAge, c.Expires)
+	}
+	logout := browser.PostForm("/account/logout", nil)
+	logout.WantRedirect(http.StatusSeeOther, "/account?notice=signed-out")
+	want.Cleared = true
+	if c := webtest.WantCookie(t, logout, want); c.Value != "" || c.Expires.Unix() != 0 {
+		t.Error("logout did not clear the cookie value and expire it")
+	}
+}
+
+func TestSessionCookieIgnoresForwardedProto(t *testing.T) {
+	for _, tc := range []struct {
+		name, wireName, proto string
+		secure                bool
+	}{
+		{"configured secure", "__Host-hp_session", "http", true},
+		{"configured insecure", "hp_session", "https", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newAccountServerWithCookieSecure(t, tc.secure)
+			s.addUser(t, "a@x.com", false)
+			srv := httptest.NewServer(s.routes) // the tunnel can send plain HTTP to the app
+			t.Cleanup(srv.Close)
+			login := webtest.NewServer(t, srv).PostForm("/account/login",
+				url.Values{"email": {"a@x.com"}, "password": {testPassword}},
+				webtest.Header("X-Forwarded-Proto", tc.proto))
+			login.WantRedirect(http.StatusSeeOther, "/account")
+			webtest.WantCookie(t, login, webtest.CookieWant{
+				Name: tc.wireName, Path: "/", Secure: tc.secure, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+			})
+		})
+	}
+}
+
+func TestBareNamedSessionCookieIsIgnored(t *testing.T) {
+	s := newAccountServer(t)
+	s.addUser(t, "a@x.com", false)
+	valid := s.signIn(t, "a@x.com", testPassword)
+	for _, target := range []string{"/account", "/api/me"} {
+		get := func(name string) *httptest.ResponseRecorder {
+			r := httptest.NewRequest("GET", "https://app.example"+target, nil)
+			r.AddCookie(&http.Cookie{Name: name, Value: valid})
+			w := httptest.NewRecorder()
+			s.routes.ServeHTTP(w, r)
+			return w
+		}
+		if w := get("__Host-hp_session"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "a@x.com") {
+			t.Errorf("%s: prefixed cookie failed authentication (status %d)", target, w.Code)
+		}
+		w := get("hp_session")
+		if target == "/api/me" && w.Code != http.StatusUnauthorized ||
+			target == "/account" && (w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `action="/account/login"`)) {
+			t.Errorf("%s: bare cookie did not get the signed-out response (status %d)", target, w.Code)
+		}
 	}
 }
 
@@ -237,7 +300,7 @@ func TestSignInIsRateLimitedPerEmail(t *testing.T) {
 	}
 	// Even the right password is refused once the bucket is empty, and
 	// changing the email's case does not buy a fresh bucket.
-	rec := s.do(t, "POST", "/account/login", url.Values{"email": {"A@x.com"}, "password": {testPassword}}, "")
+	rec := s.do(t, "POST", "/account/login", url.Values{"email": {" A@x.com "}, "password": {testPassword}}, "")
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status %d, want 429", rec.Code)
 	}
@@ -363,7 +426,7 @@ func TestCrossOriginPostIsRefused(t *testing.T) {
 	cookie := s.signIn(t, "a@x.com", testPassword)
 	r := httptest.NewRequest("POST", "/account/logout", strings.NewReader(""))
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
-	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+	r.AddCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie})
 	rec := httptest.NewRecorder()
 	s.routes.ServeHTTP(rec, r)
 	if rec.Code != http.StatusForbidden {

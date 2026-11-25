@@ -23,6 +23,7 @@ import (
 	"github.com/17xande-dev/password"
 	"github.com/17xande-dev/ratelimit"
 	"github.com/17xande-dev/ratelimit/clientip"
+	"github.com/17xande-dev/websec/cookie"
 	"golang.org/x/time/rate"
 )
 
@@ -45,6 +46,9 @@ type Options struct {
 
 	// HSTS adds Strict-Transport-Security; only for an https deployment.
 	HSTS bool
+
+	// CookieSecure comes from configuration, not the request or proxy headers.
+	CookieSecure bool
 }
 
 // Server holds everything a request needs; it is built once at startup.
@@ -58,6 +62,7 @@ type Server struct {
 	history  *history.Store
 	clientIP clientip.Source
 	limits   limits
+	session  *cookie.Cookie
 }
 
 // limits are the rate limits on everything that verifies a password. Each
@@ -149,6 +154,10 @@ func newServer(o Options) (*Server, error) {
 	if o.Accounts == nil || o.History == nil {
 		return nil, fmt.Errorf("handler: no account or history store")
 	}
+	session, err := cookie.New(cookie.Config{Name: sessionCookie, Insecure: !o.CookieSecure, Now: o.Accounts.Now})
+	if err != nil {
+		return nil, fmt.Errorf("session cookie: %w", err)
+	}
 	a, err := loadAssets()
 	if err != nil {
 		return nil, err
@@ -169,7 +178,7 @@ func newServer(o Options) (*Server, error) {
 	s := &Server{
 		fonts: o.Fonts, assets: a, log: o.Log, policy: policy,
 		accounts: o.Accounts, history: o.History, clientIP: o.ClientIP,
-		limits: lims,
+		limits: lims, session: session,
 	}
 	if s.pages, err = parsePages(a); err != nil {
 		return nil, err

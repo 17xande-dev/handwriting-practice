@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -119,25 +120,36 @@ func TestBadEmailsSkipTheLimiter(t *testing.T) {
 	}
 }
 
-// The per-email bucket is keyed on a hash, so the limiter's memory never
-// holds an email, and case changes still land in one bucket.
-func TestEmailLimiterKeyIsAHash(t *testing.T) {
+// Test the shared limiter boundary, rather than the web/API email parsers:
+// those already normalise valid addresses and would hide a raw-key bypass.
+func TestLoginAccountKeySharesNormalisedBucket(t *testing.T) {
 	s := newAccountServer(t)
-	s.addUser(t, "a@x.com", false)
-	for range 5 {
-		s.do(t, "POST", "/account/login", url.Values{"email": {"A@X.com"}, "password": {"wrong password!"}}, "")
+	r := httptest.NewRequest("POST", "/account/login", nil)
+	for _, email := range []string{"A@X.com", "a@x.com", " a@x.com", "a@x.com ", " A@X.COM "} {
+		if !s.srv.allowLogin(r, email) {
+			t.Fatal("the account burst ran out before five attempts")
+		}
 	}
-	// The limiter no longer lists keys, so prove the key by probing: after
-	// the burst is spent, only the hash of the normalised email is refused.
-	h := sha256.Sum256([]byte("a@x.com"))
-	if !s.srv.limits.loginEmail.Exhausted(string(h[:])) {
-		t.Error("the email's bucket is not keyed on the hash of the normalised email")
+	if s.srv.allowLogin(r, " A@x.com ") {
+		t.Error("case or whitespace got a fresh login bucket")
 	}
 	if n := s.srv.limits.loginEmail.Len(); n != 1 {
-		t.Errorf("%d email buckets, want 1 (case changes share one)", n)
+		t.Errorf("%d email buckets, want 1 (variants share one)", n)
 	}
-	if s.srv.limits.loginEmail.Exhausted("a@x.com") || s.srv.limits.loginEmail.Exhausted("A@X.com") {
-		t.Error("a raw email is a limiter key")
+}
+
+func TestLoginAccountKeyHashesLongAddress(t *testing.T) {
+	s := newAccountServer(t)
+	r := httptest.NewRequest("POST", "/account/login", nil)
+	email := strings.Repeat("a", 64) + "@" + strings.Repeat("b.", 67) + "example"
+	for range 5 {
+		if !s.srv.allowLogin(r, email) {
+			t.Fatal("the account burst ran out before five attempts")
+		}
+	}
+	hash := sha256.Sum256([]byte(email))
+	if !s.srv.limits.loginEmail.Exhausted("sha256:" + hex.EncodeToString(hash[:])) {
+		t.Error("the long address did not use the kit's bounded key")
 	}
 }
 

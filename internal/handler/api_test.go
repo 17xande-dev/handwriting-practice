@@ -19,7 +19,7 @@ func (s *testServer) api(t *testing.T, method, target, body, token, cookie strin
 		r.Header.Set("Authorization", "Bearer "+token)
 	}
 	if cookie != "" {
-		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+		r.AddCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie})
 	}
 	rec := httptest.NewRecorder()
 	s.routes.ServeHTTP(rec, r)
@@ -308,7 +308,7 @@ func TestCrossSiteSyncRefused(t *testing.T) {
 	cookie := s.signIn(t, "a@x.com", testPassword)
 	r := httptest.NewRequest("POST", "/api/sync", strings.NewReader(`{"cursor":0}`))
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
-	r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+	r.AddCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie})
 	rec := httptest.NewRecorder()
 	s.routes.ServeHTTP(rec, r)
 	if rec.Code != http.StatusForbidden {

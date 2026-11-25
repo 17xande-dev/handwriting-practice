@@ -13,10 +13,11 @@ import (
 	"calligraphy/internal/account"
 	"calligraphy/internal/auth"
 
+	"github.com/17xande-dev/ratelimit"
 	"github.com/17xande-dev/websec"
 )
 
-// sessionCookie carries a browser's session token.
+// sessionCookie is the bare name; the kit prefixes it on secure deployments.
 const sessionCookie = "hp_session"
 
 // notices and accountErrors are the only messages a redirect can ask the
@@ -65,11 +66,11 @@ type accountPage struct {
 // admin and API routes call it: the page shells stay identical for everyone,
 // which is what lets the service worker cache them.
 func (s *Server) currentUser(r *http.Request) (account.User, account.Session, bool) {
-	c, err := r.Cookie(sessionCookie)
-	if err != nil {
+	token, ok := s.session.Value(r)
+	if !ok {
 		return account.User{}, account.Session{}, false
 	}
-	u, sess, err := s.accounts.Authenticate(r.Context(), c.Value)
+	u, sess, err := s.accounts.Authenticate(r.Context(), token)
 	if err != nil {
 		if !errors.Is(err, account.ErrNotFound) {
 			s.log.Error("authenticate", "err", err)
@@ -77,29 +78,6 @@ func (s *Server) currentUser(r *http.Request) (account.User, account.Session, bo
 		return account.User{}, account.Session{}, false
 	}
 	return u, sess, true
-}
-
-func (s *Server) setSessionCookie(w http.ResponseWriter, token string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		// Browsers accept Secure cookies from http://localhost, so this holds
-		// in development too.
-		Secure: true,
-		// Lax, hard-coded: the cookie signs in an account (and an admin), so it
-		// must never ride along on another site's cross-site POST.
-		SameSite: http.SameSiteLaxMode,
-		// The browser's maximum. The server's own expiry (90 days, sliding)
-		// decides when the session ends; the cookie only has to outlive it.
-		MaxAge: 400 * 24 * 60 * 60,
-	})
-}
-
-func clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true,
-		Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 }
 
 // safeNext keeps a post-sign-in redirect on this site. The rules (browsers
@@ -166,7 +144,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	token, _, err := s.accounts.SignIn(r.Context(), u, account.KindWeb, browserLabel(r.UserAgent()))
+	token, sess, err := s.accounts.SignIn(r.Context(), u, account.KindWeb, browserLabel(r.UserAgent()))
 	if err != nil {
 		if errors.Is(err, account.ErrStaleCredentials) {
 			fail(http.StatusUnauthorized, loginFailed)
@@ -178,14 +156,15 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	// Signing in over a live session (another account's, say) ends the old
 	// one: otherwise it lingers, valid but unreachable, in that account's
 	// device list.
-	if old, err := r.Cookie(sessionCookie); err == nil && old.Value != token {
-		if err := s.accounts.RevokeToken(r.Context(), old.Value); err != nil {
+	if old, ok := s.session.Value(r); ok && old != token {
+		if err := s.accounts.RevokeToken(r.Context(), old); err != nil {
 			s.log.Error("revoke previous session", "err", err)
 		}
 	}
 	s.upgradePasswordHash(r.Context(), u, password, rehash)
 	s.accounts.RecordLogin(r.Context(), u.ID)
-	s.setSessionCookie(w, token)
+	// Store touches can extend the database expiry, but not this browser's deadline.
+	s.session.Set(w, token, sess.ExpiresAt)
 	if next == "" {
 		next = "/account"
 	}
@@ -201,10 +180,9 @@ func emailTag(email string) string {
 
 var errBadCredentials = errors.New("bad credentials")
 
-// allowLogin applies both sign-in limits to an already normalised email. The
-// tight one is keyed on the email's hash, which an attacker cannot shed the
-// way they can a cookie; the looser per-IP ceiling (an IPv6 client counts by
-// its /64) stops one address spraying many emails. A request the IP limit
+// allowLogin applies both sign-in limits. The tight one follows the account,
+// which an attacker cannot shed like a cookie; the looser per-IP ceiling
+// (an IPv6 client counts by its /64) stops one address spraying many emails. A request the IP limit
 // refused never reaches the email limit: it would otherwise leave a bucket
 // per fresh email for as long as buckets live. A refusal is logged.
 func (s *Server) allowLogin(r *http.Request, email string) bool {
@@ -212,8 +190,7 @@ func (s *Server) allowLogin(r *http.Request, email string) bool {
 	ipOK := s.limits.loginIP.Allow(s.ipKey(r))
 	emailOK := true
 	if ipOK {
-		h := sha256.Sum256([]byte(email))
-		emailOK = s.limits.loginEmail.Allow(string(h[:]))
+		emailOK = s.limits.loginEmail.Allow(ratelimit.AccountKey(email))
 	}
 	if !ipOK || !emailOK {
 		s.log.Warn("sign-in rate limited", "email", emailTag(email), "ip", ip, "path", r.URL.Path,
@@ -279,13 +256,13 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if !parseForm(w, r, maxFormBody) {
 		return
 	}
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		if err := s.accounts.RevokeToken(r.Context(), c.Value); err != nil {
+	if token, ok := s.session.Value(r); ok {
+		if err := s.accounts.RevokeToken(r.Context(), token); err != nil {
 			s.serverError(w, err)
 			return
 		}
 	}
-	clearSessionCookie(w)
+	s.session.Clear(w)
 	http.Redirect(w, r, "/account?notice=signed-out", http.StatusSeeOther)
 }
 
@@ -362,7 +339,7 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request, u account
 		return
 	}
 	if id == sess.ID {
-		clearSessionCookie(w)
+		s.session.Clear(w)
 		http.Redirect(w, r, "/account?notice=signed-out", http.StatusSeeOther)
 		return
 	}

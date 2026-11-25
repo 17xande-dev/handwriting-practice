@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/17xande-dev/ratelimit/clientip"
+	"github.com/17xande-dev/websec/csrf"
 )
 
 // Config is the whole runtime configuration.
@@ -20,6 +21,13 @@ type Config struct {
 	// sent from a plain-HTTP localhost it pins a rule that breaks the next
 	// project on that port.
 	HSTS bool
+
+	// CookieSecure describes the browser-facing connection, which may be
+	// HTTPS even when the tunnel connects to this server over HTTP.
+	CookieSecure bool
+
+	// BaseURL is the optional, canonical browser-facing origin.
+	BaseURL string
 
 	// ShutdownTimeout bounds how long in-flight requests get on SIGTERM.
 	ShutdownTimeout time.Duration
@@ -49,6 +57,7 @@ type Config struct {
 func Load(getenv func(string) string) (Config, error) {
 	c := Config{
 		Addr:            ":8080",
+		CookieSecure:    true,
 		ShutdownTimeout: 10 * time.Second,
 	}
 	var errs []string
@@ -63,6 +72,20 @@ func Load(getenv func(string) string) (Config, error) {
 		c.HSTS = true
 	default:
 		errs = append(errs, fmt.Sprintf("HSTS: want 1/0/true/false, got %q", v))
+	}
+
+	switch v := getenv("COOKIE_SECURE"); v {
+	case "", "1", "true":
+	case "0", "false":
+		c.CookieSecure = false
+	default:
+		errs = append(errs, fmt.Sprintf("COOKIE_SECURE: want 1/0/true/false, got %q", v))
+	}
+
+	if c.BaseURL = getenv("BASE_URL"); c.BaseURL != "" {
+		if err := csrf.ValidateOrigin(c.BaseURL, !c.CookieSecure); err != nil {
+			errs = append(errs, fmt.Sprintf("BASE_URL: %v", err))
+		}
 	}
 
 	if v := getenv("SHUTDOWN_TIMEOUT"); v != "" {

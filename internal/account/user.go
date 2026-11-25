@@ -43,6 +43,9 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db, now: time.Now}
 }
 
+// Now gives the HTTP cookie policy the same clock as the session store.
+func (s *Store) Now() time.Time { return s.now() }
+
 // timestamp is how every time is stored: SQLite has no datetime type, and
 // RFC3339 in UTC sorts and compares correctly as text.
 func timestamp(t time.Time) string {

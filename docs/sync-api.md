@@ -245,7 +245,8 @@ time of the last edit in ms (so the last writer wins), `v` is 1.
 
 ## Authentication
 
-- **Browser:** the `hp_session` cookie set by signing in at `/account`. Same-origin `fetch` sends
+- **Browser:** the `__Host-hp_session` cookie set by signing in at `/account` (`hp_session` only
+  when explicitly running without Secure cookies for plain-HTTP development). Same-origin `fetch` sends
   it. Cross-site requests are refused (403) by the server's cross-origin protection. The cookie is
   `Secure`: browsers accept it from `https://` and from `http://localhost`, but not from a
   plain-HTTP LAN address, so web sign-in needs HTTPS (or localhost). The iPad app uses a bearer

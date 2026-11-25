@@ -55,6 +55,8 @@ env:
     # Cloudflare terminates https in front of it, so the browser always sees
     # https.
     HSTS: "1"
+    COOKIE_SECURE: "1"
+    BASE_URL: https://handwriting.17xande.dev
     # Cloudflare overwrites this header with the connecting address, which is
     # why it is preferred over X-Forwarded-For (a list a client can prepend
     # to). Safe only while the shared tunnel is the sole way in: kamal-proxy

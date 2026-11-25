@@ -40,7 +40,7 @@ func testOptionsDB(t testing.TB, list []fonts.Font) (Options, *sql.DB) {
 	d := dbtest.New(t)
 	return Options{
 		Fonts: list, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Accounts: account.NewStore(d), History: history.NewStore(d),
+		Accounts: account.NewStore(d), History: history.NewStore(d), CookieSecure: true,
 	}, d
 }
 
@@ -55,7 +55,13 @@ type testServer struct {
 
 func newAccountServer(t *testing.T) *testServer {
 	t.Helper()
+	return newAccountServerWithCookieSecure(t, true)
+}
+
+func newAccountServerWithCookieSecure(t *testing.T, secure bool) *testServer {
+	t.Helper()
 	o, d := testOptionsDB(t, fonts.Builtin)
+	o.CookieSecure = secure
 	srv, err := newServer(o)
 	if err != nil {
 		t.Fatal(err)

@@ -1,4 +1,7 @@
 services:
   server:
+    environment:
+      # This override publishes plain HTTP for development, not production.
+      COOKIE_SECURE: "${COOKIE_SECURE:-0}"
     ports:
       - "${HOST_PORT:-8083}:8080"

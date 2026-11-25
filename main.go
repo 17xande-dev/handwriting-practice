@@ -92,12 +92,13 @@ func run(log *slog.Logger) error {
 
 	accounts := account.NewStore(database)
 	h, err := handler.New(handler.Options{
-		Fonts:    fonts.Builtin,
-		Log:      log,
-		Accounts: accounts,
-		History:  history.NewStore(database),
-		ClientIP: cfg.ClientIP,
-		HSTS:     cfg.HSTS,
+		Fonts:        fonts.Builtin,
+		Log:          log,
+		Accounts:     accounts,
+		History:      history.NewStore(database),
+		ClientIP:     cfg.ClientIP,
+		HSTS:         cfg.HSTS,
+		CookieSecure: cfg.CookieSecure,
 	})
 	if err != nil {
 		return err
