@@ -42,12 +42,15 @@ func apiError(w http.ResponseWriter, status int, msg string) {
 }
 
 // bearer distinguishes an empty Bearer credential from an absent one. The
-// scheme and the token may be separated by a space or a tab.
+// scheme and the token may be separated by a space or a tab, and nothing else
+// is trimmed: strings.TrimSpace would also strip Unicode spaces (a non-breaking
+// space reaches the handler from a real client), so a padded token would
+// authenticate where the documented "Bearer <token>" form is refused.
 func bearer(r *http.Request) (token string, present bool) {
-	value := strings.TrimSpace(r.Header.Get("Authorization"))
+	value := strings.Trim(r.Header.Get("Authorization"), " \t")
 	scheme := value
 	if i := strings.IndexAny(value, " \t"); i >= 0 {
-		scheme, token = value[:i], strings.TrimSpace(value[i:])
+		scheme, token = value[:i], strings.Trim(value[i:], " \t")
 	}
 	if !strings.EqualFold(scheme, "Bearer") {
 		return "", false

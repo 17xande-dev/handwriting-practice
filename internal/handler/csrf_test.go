@@ -214,6 +214,13 @@ func TestAuthorizationHeaderNeverFallsBackToCookie(t *testing.T) {
 		{"other scheme", []string{"Bogus"}, http.StatusUnauthorized},
 		{"non-breaking space", []string{"Bearer\u00a0bogus"}, http.StatusUnauthorized},
 		{"non-breaking space before a live token", []string{"Bearer\u00a0" + token}, http.StatusUnauthorized},
+		{"em space before a live token", []string{"Bearer " + token}, http.StatusUnauthorized},
+		{"trailing non-breaking space", []string{"Bearer " + token + " "}, http.StatusUnauthorized},
+		{"trailing em space", []string{"Bearer " + token + " "}, http.StatusUnauthorized},
+		{"leading non-breaking space", []string{" Bearer " + token}, http.StatusUnauthorized},
+		{"leading em space", []string{" Bearer " + token}, http.StatusUnauthorized},
+		{"space then non-breaking space", []string{"Bearer  " + token}, http.StatusUnauthorized},
+		{"padded with ASCII only", []string{" \tBearer \t" + token + " \t"}, http.StatusOK},
 		{"basic then bearer", []string{"Basic x", "Bearer bogus"}, http.StatusUnauthorized},
 		{"two live Bearers", []string{"Bearer " + token, "Bearer " + token}, http.StatusUnauthorized},
 		{"live Bearer then basic", []string{"Bearer " + token, "Basic x"}, http.StatusUnauthorized},
@@ -284,6 +291,15 @@ func TestBearerParsing(t *testing.T) {
 		{name: "valid", header: "bEaReR token ", token: "token", present: true},
 		{name: "tab separator", header: "Bearer\ttoken", token: "token", present: true},
 		{name: "space then tab", header: "Bearer \t token", token: "token", present: true},
+		// Only SP and HTAB are trimmed. A Unicode space is not a separator and
+		// not padding: it must never turn a malformed value into a token.
+		{name: "non-breaking space separator", header: "Bearer token"},
+		{name: "em space separator", header: "Bearer token"},
+		{name: "space then non-breaking space", header: "Bearer  token", token: " token", present: true},
+		{name: "trailing non-breaking space", header: "Bearer token ", token: "token ", present: true},
+		{name: "trailing em space", header: "Bearer token ", token: "token ", present: true},
+		{name: "leading non-breaking space", header: " Bearer token"},
+		{name: "leading em space", header: " Bearer token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/api/me", nil)
