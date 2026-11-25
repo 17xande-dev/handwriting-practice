@@ -249,7 +249,8 @@ time of the last edit in ms (so the last writer wins), `v` is 1.
   when explicitly running without Secure cookies for plain-HTTP development). Same-origin `fetch` sends
   it. Unsafe cross-origin browser requests are refused by the policy below. The cookie is
   `Secure`: browsers accept it from `https://` and from `http://localhost`, but not from a
-  plain-HTTP LAN address, so web sign-in needs HTTPS (or localhost). The iPad app uses a bearer
+  plain-HTTP LAN address, so web sign-in needs HTTPS (or localhost), unless the server runs with
+  `COOKIE_SECURE=0` for trusted plain-HTTP development. The iPad app uses a bearer
   token and does not. A browser sign-in ends after 30 days unused or 90 days from sign-in by
   default, whichever comes first.
 - **App:** `Authorization: Bearer <token>`, from `POST /api/token`. By default a token expires

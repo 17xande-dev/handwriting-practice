@@ -16,7 +16,11 @@ Then open `http://<this machine's LAN IP>:8083` in Safari on the iPad. Pointer
 Events need no secure context, so plain HTTP on the LAN is fine for writing.
 Signing in uses Secure cookies by default. For a trusted plain-HTTP development
 network only, explicitly run with `COOKIE_SECURE=0`. Never use that setting on
-a public deployment.
+a public deployment. With the default `COOKIE_SECURE=1`, browsers accept the
+cookie from `http://localhost` but not from a LAN address, and Safari has
+historically refused Secure cookies over `http://localhost` too (not rechecked
+on current versions), so `make run` may not sign in from Safari: use
+`COOKIE_SECURE=0` there.
 
 The server needs `DB_PATH`, a SQLite file for accounts and synced history;
 `make run` defaults it to `~/.local/share/handwriting/handwriting.db`
@@ -421,9 +425,13 @@ health check `/healthz`). Cloudflare terminates TLS, so Kamal runs with
 `handwriting_data` volume at `/data`.
 
 The first deploy with `__Host-hp_session` signs web users out once; rollback to
-the bare cookie name does so again. The iPad token is unaffected. Browser sync
-turns off on the first 401 and offers to upload local history on the next
-sign-in; deletions still queued at sign-out are lost.
+the bare cookie name does so again. The iPad token is unaffected by the deploy
+itself and keeps working while it is used at least every 90 days. After a
+rollback, though, the old version reads the expiry the new version wrote on
+iPad sessions as a sliding 90 days, so an iPad unused for about 90 days is
+signed out, which never happened before. Browser sync turns off on the first
+401 and offers to upload local history on the next sign-in; deletions still
+queued at sign-out are lost.
 
 ```sh
 make deploy                        # check gate, then kamal deploy (build, push to ghcr.io, swap in)
