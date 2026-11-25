@@ -268,7 +268,9 @@ The browser cookie is used only when the request has no `Authorization` header a
 request that carries one must carry exactly one `Bearer <token>`; an empty `Bearer`, another
 scheme (`Basic`, ...), an empty value or a second `Authorization` header gets `401` on
 authenticated API endpoints, even with a valid browser cookie. The scheme is case-insensitive;
-trailing whitespace does not turn an empty bearer credential into cookie authentication.
+trailing whitespace does not turn an empty bearer credential into cookie authentication. A
+space or a tab may separate the scheme from the token, and only spaces and tabs are trimmed:
+any other whitespace (a non-breaking space, say) makes the header malformed, so `401`.
 
 Accounts are created by an admin at `/admin/users`, or the first one with
 `calligraphy -add-admin
