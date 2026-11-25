@@ -55,16 +55,28 @@ func bearer(r *http.Request) (token string, present bool) {
 // is dead" and throw it away, so a passing database error must not become one.
 var errNotSignedIn = errors.New("not signed in")
 
-// apiUser uses the browser cookie only when no Bearer credential was sent.
-// A malformed device request must not act on a browser's signed-in account.
+// apiUser uses the browser cookie only when the request has no Authorization
+// header at all. A request that carries one is a device request and must be
+// exactly one well-formed "Bearer <token>"; anything else (another scheme, an
+// empty value, a second header) is refused rather than acting on a browser's
+// signed-in account.
 func (s *Server) apiUser(r *http.Request) (account.User, account.Session, error) {
-	tok, hasBearer := bearer(r)
-	if !hasBearer {
+	var tok string
+	switch headers := r.Header.Values("Authorization"); len(headers) {
+	case 0:
 		var ok bool
 		tok, ok = s.session.Value(r)
 		if !ok {
 			return account.User{}, account.Session{}, errNotSignedIn
 		}
+	case 1:
+		var hasBearer bool
+		tok, hasBearer = bearer(r)
+		if !hasBearer {
+			return account.User{}, account.Session{}, errNotSignedIn
+		}
+	default:
+		return account.User{}, account.Session{}, errNotSignedIn
 	}
 	if tok == "" {
 		return account.User{}, account.Session{}, errNotSignedIn

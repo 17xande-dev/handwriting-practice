@@ -263,9 +263,11 @@ The server can configure the limits in the README config table. Last use is reco
 hourly, so idle expiry can arrive up to an hour early. Activity never extends the absolute limit,
 and neither an existing token nor a new one is rotated automatically.
 
-An empty `Authorization: Bearer` credential gets `401` on authenticated API endpoints,
-even with a valid browser cookie. The scheme is case-insensitive; trailing whitespace does
-not turn an empty bearer credential into cookie authentication.
+The browser cookie is used only when the request has no `Authorization` header at all. A
+request that carries one must carry exactly one `Bearer <token>`; an empty `Bearer`, another
+scheme (`Basic`, ...), an empty value or a second `Authorization` header gets `401` on
+authenticated API endpoints, even with a valid browser cookie. The scheme is case-insensitive;
+trailing whitespace does not turn an empty bearer credential into cookie authentication.
 
 Accounts are created by an admin at `/admin/users`, or the first one with
 `calligraphy -add-admin

@@ -157,9 +157,63 @@ func TestEmptyBearerDoesNotFallBackToCookie(t *testing.T) {
 		{"one-space", "Bearer "},
 		{"mixed-case-several-spaces", "bEaReR   "},
 		{"upper-case-trailing-tab", "BEARER \t"},
+		{"basic", "Basic Zm9vOmJhcg=="},
+		{"other-scheme", "Bogus"},
+		{"non-breaking-space", "Bearer\u00a0bogus"},
+		{"unknown-token", "Bearer bogus"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c.With(t).Get("/api/me", webtest.Header("Authorization", tc.auth)).WantStatus(http.StatusUnauthorized)
+		})
+	}
+}
+
+// meWith sends GET /api/me with exactly the given Authorization header values
+// (none when empty) and a valid session cookie, bypassing the client so that
+// an empty value or a repeated header reaches the handler as written.
+func (s *testServer) meWith(t *testing.T, cookie string, authorization ...string) int {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	r.Header["Authorization"] = authorization
+	r.AddCookie(&http.Cookie{Name: s.srv.session.Name(), Value: cookie})
+	rec := httptest.NewRecorder()
+	s.routes.ServeHTTP(rec, r)
+	return rec.Code
+}
+
+// Any Authorization header means a device request: the cookie is used only
+// when there is none, and a repeated header is refused rather than read as its
+// first value.
+func TestAuthorizationHeaderNeverFallsBackToCookie(t *testing.T) {
+	s := newAccountServer(t)
+	const email = "member@example.com"
+	s.addUser(t, email, false)
+	cookie := s.signIn(t, email, testPassword)
+	token := s.deviceToken(t, email, testPassword)
+
+	if got := s.meWith(t, cookie); got != http.StatusOK {
+		t.Fatalf("cookie alone: %d, want 200", got)
+	}
+	for _, tc := range []struct {
+		name string
+		auth []string
+		want int
+	}{
+		{"one Bearer", []string{"Bearer " + token}, http.StatusOK},
+		{"empty value", []string{""}, http.StatusUnauthorized},
+		{"basic", []string{"Basic Zm9vOmJhcg=="}, http.StatusUnauthorized},
+		{"other scheme", []string{"Bogus"}, http.StatusUnauthorized},
+		{"non-breaking space", []string{"Bearer\u00a0bogus"}, http.StatusUnauthorized},
+		{"non-breaking space before a live token", []string{"Bearer\u00a0" + token}, http.StatusUnauthorized},
+		{"basic then bearer", []string{"Basic x", "Bearer bogus"}, http.StatusUnauthorized},
+		{"two live Bearers", []string{"Bearer " + token, "Bearer " + token}, http.StatusUnauthorized},
+		{"live Bearer then basic", []string{"Bearer " + token, "Basic x"}, http.StatusUnauthorized},
+		{"two empty values", []string{"", ""}, http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := s.meWith(t, cookie, tc.auth...); got != tc.want {
+				t.Fatalf("status %d, want %d", got, tc.want)
+			}
 		})
 	}
 }
