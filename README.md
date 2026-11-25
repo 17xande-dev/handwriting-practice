@@ -346,9 +346,20 @@ devices at `/account`.
   `SameSite=Lax` browser cookie expires at the absolute deadline. Plain-HTTP
   development with `COOKIE_SECURE=0` uses the unprefixed `hp_session`; the
   iPad bearer token does not use either cookie.
-- **State changes** pass `http.CrossOriginProtection`, the CSRF defence for the
-  forms and the API alike. The strict CSP is unchanged: no inline styles or
-  scripts, and a test checks the account and admin pages for them.
+- **Cross-origin protection.** The whole site (including login, admin, the sync
+  API and stateless practice forms) sits behind Go's `http.CrossOriginProtection`.
+  GET, HEAD and OPTIONS are exempt because they don't request changes; there
+  are no route exemptions. For other methods Go checks `Sec-Fetch-Site`, or
+  compares `Origin` with `Host` when that header is absent. The exact public
+  `BASE_URL`, if configured, is also trusted so the check works behind a proxy
+  that rewrites `Host`. Refusals are non-cacheable `403`s, with a warning
+  recording the method, route pattern (or a fixed fallback), and deciding
+  header name, not the raw path or credentials.
+- **Clients without browser headers.** Go allows requests with neither
+  `Sec-Fetch-Site` nor `Origin`. The iPad needs this for password sign-in and
+  bearer-token requests; it doesn't send a browser cookie. The same rule
+  also allows cookie requests from older browsers that omit both headers;
+  the `SameSite=Lax` session cookie is the backstop for cross-site POSTs there.
 - **Sync** is `POST /api/sync` with a cursor, tombstones and two record kinds,
   `check` (one checked line) and `ink` (the quantized strokes of an attempt;
   the web does not write these yet, but stores and syncs them). The contract,
@@ -479,9 +490,10 @@ kamal app boot
 
 Cloudflare settings for the hostname:
 
-- The tunnel's public hostname points at `http://kamal-proxy:80`. Do not set
-  an `httpHostHeader` override: the cross-origin check compares `Origin` with
-  the request's `Host`, so rewriting `Host` breaks every sign-in and sync POST.
+- The tunnel's public hostname points at `http://kamal-proxy:80`. Keep
+  `BASE_URL` set to the exact public HTTPS origin so Origin-only sign-in and
+  sync requests still work if a proxy rewrites `Host`. Without `BASE_URL`,
+  preserve the browser-facing `Host` for those requests.
 - Turn off Email Obfuscation and Rocket Loader for this hostname (a
   Configuration Rule, or Speed and Scrape Shield). Both rewrite served pages
   and scripts, which the strict CSP (`script-src 'self'`) then refuses, and

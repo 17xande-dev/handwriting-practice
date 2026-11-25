@@ -247,7 +247,7 @@ time of the last edit in ms (so the last writer wins), `v` is 1.
 
 - **Browser:** the `__Host-hp_session` cookie set by signing in at `/account` (`hp_session` only
   when explicitly running without Secure cookies for plain-HTTP development). Same-origin `fetch` sends
-  it. Cross-site requests are refused (403) by the server's cross-origin protection. The cookie is
+  it. Unsafe cross-origin browser requests are refused by the policy below. The cookie is
   `Secure`: browsers accept it from `https://` and from `http://localhost`, but not from a
   plain-HTTP LAN address, so web sign-in needs HTTPS (or localhost). The iPad app uses a bearer
   token and does not. A browser sign-in ends after 30 days unused or 90 days from sign-in by
@@ -263,6 +263,10 @@ The server can configure the limits in the README config table. Last use is reco
 hourly, so idle expiry can arrive up to an hour early. Activity never extends the absolute limit,
 and neither an existing token nor a new one is rotated automatically.
 
+An empty `Authorization: Bearer` credential gets `401` on authenticated API endpoints,
+even with a valid browser cookie. The scheme is case-insensitive; trailing whitespace does
+not turn an empty bearer credential into cookie authentication.
+
 Accounts are created by an admin at `/admin/users`, or the first one with
 `calligraphy -add-admin
 EMAIL`. There is no sign-up endpoint.
@@ -271,6 +275,12 @@ EMAIL`. There is no sign-up endpoint.
 
 All bodies are JSON. Errors are `{"error": "message"}` with a 4xx/5xx status. Every response is
 `Cache-Control: no-store`.
+
+The API uses Go's cross-origin protection for unsafe methods, just like the web forms.
+A refusal is `403` with `{"error":"cross-origin request refused"}`. The configured public
+origin (`BASE_URL`) is trusted behind a proxy. iPad requests with neither `Origin` nor
+`Sec-Fetch-Site` still work; the same stdlib rule permits older browsers with neither
+header, where the browser cookie's `SameSite=Lax` is the cross-site backstop.
 
 ### `POST /api/token` - sign the app in
 
