@@ -296,7 +296,10 @@ func TestRevokeOtherSession(t *testing.T) {
 	s := newAccountServer(t)
 	u := s.addUser(t, "a@x.com", false)
 	cookie := s.signIn(t, "a@x.com", testPassword)
-	tok, dev, _ := s.accounts.CreateSession(t.Context(), u.ID, account.KindDevice, "iPad")
+	tok, dev, err := s.accounts.SignIn(t.Context(), u, account.KindDevice, "iPad")
+	if err != nil {
+		t.Fatal(err)
+	}
 	rec := s.do(t, "POST", "/account/sessions/"+itoa(dev.ID)+"/revoke", url.Values{}, cookie)
 	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "notice=revoked") {
 		t.Fatalf("revoke: %d %s", rec.Code, loc)
