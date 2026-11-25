@@ -416,10 +416,16 @@ func TestEveryRouteIsPublicOrProtected(t *testing.T) {
 		t.Fatalf("collected only %d routes", len(patterns))
 	}
 	routes := webtest.Routes(t, patterns, map[string]string{"id": "1", "slug": "arches"})
+	seen := 0
 	for i, route := range routes {
 		if why, ok := publicRoutes[route.Pattern]; ok {
 			routes[i].Public, routes[i].Why = true, why
+			seen++
 		}
+	}
+	// A listed route that is no longer registered is a stale exception.
+	if seen != len(publicRoutes) {
+		t.Fatalf("%d of the %d public routes are registered", seen, len(publicRoutes))
 	}
 	swept := webtest.Sweep{
 		Routes: routes, Min: protectedRoutes,
