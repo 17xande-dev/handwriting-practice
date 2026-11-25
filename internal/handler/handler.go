@@ -225,9 +225,10 @@ func (s *Server) buildRoutes(origin string) (http.Handler, error) {
 		}
 	}
 	protection.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reason := "Origin"
+		// The header that decided the refusal: Fetch Metadata wins when sent.
+		header := "Origin"
 		if r.Header.Get("Sec-Fetch-Site") != "" {
-			reason = "Sec-Fetch-Site"
+			header = "Sec-Fetch-Site"
 		}
 		_, pattern := mux.Handler(r)
 		// For path-cleaning redirects ServeMux can return a request path
@@ -236,7 +237,7 @@ func (s *Server) buildRoutes(origin string) (http.Handler, error) {
 		if !strings.HasPrefix(pattern, r.Method+" ") {
 			pattern = "unmatched"
 		}
-		s.log.WarnContext(r.Context(), "cross-origin request refused", "method", r.Method, "route", pattern, "reason", reason)
+		s.log.WarnContext(r.Context(), "cross-origin request refused", "method", r.Method, "route", pattern, "header", header)
 
 		w.Header().Set("Cache-Control", "no-store")
 		const message = "cross-origin request refused"

@@ -244,7 +244,7 @@ func TestCrossOriginRefusalLogDoesNotLeak(t *testing.T) {
 		cookieValue = "private-cookie-value"
 	)
 	for _, tc := range []struct {
-		name, path, route, reason string
+		name, path, route, header string
 		opts                      []webtest.Option
 	}{
 		{"Origin", "/account/sessions/" + pathValue + "/revoke", "POST /account/sessions/{id}/revoke", "Origin", nil},
@@ -264,8 +264,8 @@ func TestCrossOriginRefusalLogDoesNotLeak(t *testing.T) {
 			text := logs.String()
 			webtest.NoSecrets(t, text, `"msg":"cross-origin request refused"`, pathValue, originValue, bearerValue, cookieValue)
 			if !strings.Contains(text, `"level":"WARN","msg":"cross-origin request refused","method":"POST","route":"`+
-				tc.route+`","reason":"`+tc.reason+`"`) {
-				t.Error("refusal warning missing the expected method, route or reason")
+				tc.route+`","header":"`+tc.header+`"`) {
+				t.Error("refusal warning missing the expected method, route or header")
 			}
 		})
 	}
