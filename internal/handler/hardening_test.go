@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"calligraphy/internal/auth"
+	"calligraphy/internal/middleware"
 
 	"github.com/17xande-dev/websec/webtest"
 )
@@ -241,6 +243,50 @@ func TestFailedSignInsAndLimitsAreLoggedWithoutSecrets(t *testing.T) {
 	if !regexp.MustCompile(`"email":"[0-9a-f]{12}"`).MatchString(out) {
 		t.Errorf("email is not a 12-hex tag:\n%s", out)
 	}
+}
+
+// The device API handles the three secrets a web sign-in does not: the issued
+// token, the bearer that carries it afterwards, and the password in a JSON
+// body. None of them may reach the application log or the access log, on
+// success or on failure.
+func TestDeviceAPILogsContainNoSecrets(t *testing.T) {
+	s := newAccountServer(t)
+	log, logs := webtest.Logger(t)
+	s.srv.log = log
+	const (
+		email    = "device.owner@example.com" // NoSecrets needs at least 12 bytes
+		password = "a long enough password"
+	)
+	s.addUser(t, email, false)
+	c := plainClient(t, middleware.Logging(log)(s.routes))
+	jsonRequest := func(method, path, body string, opts ...webtest.Option) *webtest.Response {
+		req := c.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		return c.Do(req, opts...)
+	}
+
+	// A failed sign-in logs a warning; a good one issues the token.
+	jsonRequest("POST", "/api/token", fmt.Sprintf(`{"email":%q,"password":"wrong password entirely","label":"iPad"}`, email)).
+		WantStatus(http.StatusUnauthorized)
+	res := jsonRequest("POST", "/api/token", fmt.Sprintf(`{"email":%q,"password":%q,"label":"iPad"}`, email, password))
+	res.WantStatus(http.StatusOK)
+	var issued struct{ Token string }
+	if err := json.Unmarshal([]byte(res.Body), &issued); err != nil || issued.Token == "" {
+		t.Fatalf("no token issued: %v", err)
+	}
+	bearer := webtest.Header("Authorization", "Bearer "+issued.Token)
+	jsonRequest("POST", "/api/sync", `{}`, bearer).WantStatus(http.StatusOK)
+	jsonRequest("DELETE", "/api/token", ``, bearer).WantStatus(http.StatusNoContent)
+	// The revoked bearer is refused, which exercises the failure path too.
+	jsonRequest("POST", "/api/sync", `{}`, bearer).WantStatus(http.StatusUnauthorized)
+
+	out := logs.String()
+	// "sign-in failed" is the application's own line and `"msg":"request"` the
+	// access log: both must be present, so an empty log cannot pass.
+	if !strings.Contains(out, `"path":"/api/sync"`) || !strings.Contains(out, `"path":"/api/token"`) {
+		t.Fatalf("access log lines missing:\n%s", out)
+	}
+	webtest.NoSecrets(t, out, "sign-in failed", issued.Token, password, "wrong password entirely", email)
 }
 
 // Signing in over a live session ends that session, so it does not linger in
