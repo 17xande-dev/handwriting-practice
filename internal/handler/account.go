@@ -163,8 +163,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	s.upgradePasswordHash(r.Context(), u, password, rehash)
 	s.accounts.RecordLogin(r.Context(), u.ID)
-	// Store touches can extend the database expiry, but not this browser's deadline.
-	s.session.Set(w, token, sess.ExpiresAt)
+	// Activity can extend the idle window, but never the cookie's absolute deadline.
+	s.session.Set(w, token, s.accounts.Lifetimes().Web.AbsoluteExpiry(sess.CreatedAt))
 	if next == "" {
 		next = "/account"
 	}

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"calligraphy/internal/auth"
+
+	"github.com/17xande-dev/websec/session"
 )
 
 // Session kinds: a browser holds a cookie, the iPad app a bearer token.
@@ -16,9 +18,27 @@ const (
 	KindDevice = "device"
 )
 
-// WebSessionTTL is how long a browser stays signed in without visiting. It
-// slides: every use pushes it out again.
-const WebSessionTTL = 90 * 24 * time.Hour
+// Lifetimes holds the validated policies for the two credential kinds.
+type Lifetimes struct {
+	Web, Device session.Lifetime
+}
+
+// DefaultLifetimes returns the server defaults independently of environment.
+func DefaultLifetimes() Lifetimes {
+	const day = 24 * time.Hour
+	return Lifetimes{
+		Web:    session.Lifetime{Idle: 30 * day, Absolute: 90 * day},
+		Device: session.Lifetime{Idle: 90 * day, Absolute: 365 * day},
+	}
+}
+
+// Lifetime selects the policy for a kind from the auth_sessions constraint.
+func (l Lifetimes) Lifetime(kind string) session.Lifetime {
+	if kind == KindDevice {
+		return l.Device
+	}
+	return l.Web
+}
 
 // touchInterval bounds how often a session's last-use time is written, so a
 // page load is not a database write.
@@ -32,9 +52,7 @@ type Session struct {
 	Label      string
 	CreatedAt  time.Time
 	LastUsedAt time.Time
-	// ExpiresAt is the zero time for a device, which stays signed in until
-	// revoked.
-	ExpiresAt time.Time
+	ExpiresAt  time.Time // derived server deadline (idle or absolute, whichever is earlier)
 }
 
 // SignIn returns a token whose hash is stored only if the verified password
@@ -47,11 +65,8 @@ func (s *Store) SignIn(ctx context.Context, u User, kind, label string) (string,
 
 func (s *Store) createSession(ctx context.Context, userID int64, verifiedHash string, guard bool, kind, label string) (string, Session, error) {
 	token := auth.NewToken()
-	now := s.now()
-	var expires time.Time
-	if kind == KindWeb {
-		expires = now.Add(WebSessionTTL)
-	}
+	now := s.now().UTC().Truncate(time.Second)
+	expires := s.lifetimes.Lifetime(kind).ExpiresAt(now, now)
 	// 100 characters, not bytes: a byte cut can split a UTF-8 rune.
 	if r := []rune(label); len(r) > 100 {
 		label = string(r[:100])
@@ -88,36 +103,44 @@ func (s *Store) Authenticate(ctx context.Context, token string) (User, Session, 
 		return User{}, Session{}, ErrNotFound
 	}
 	var sess Session
-	var created, lastUsed, expires string
-	row := s.db.QueryRowContext(ctx, `SELECT a.id, a.user_id, a.kind, a.label, a.created_at, a.last_used_at, a.expires_at
+	var created, lastUsed string
+	hash := auth.HashToken(token)
+	row := s.db.QueryRowContext(ctx, `SELECT a.id, a.user_id, a.kind, a.label, a.created_at, a.last_used_at
 		FROM auth_sessions a JOIN users u ON u.id = a.user_id
-		WHERE a.token_hash = ? AND u.disabled = 0`, auth.HashToken(token))
-	err := row.Scan(&sess.ID, &sess.UserID, &sess.Kind, &sess.Label, &created, &lastUsed, &expires)
+		WHERE a.token_hash = ? AND u.disabled = 0`, hash)
+	err := row.Scan(&sess.ID, &sess.UserID, &sess.Kind, &sess.Label, &created, &lastUsed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, Session{}, ErrNotFound
 	}
 	if err != nil {
 		return User{}, Session{}, err
 	}
-	sess.CreatedAt, sess.LastUsedAt, sess.ExpiresAt = parseTime(created), parseTime(lastUsed), parseTime(expires)
-	now := s.now()
-	if !sess.ExpiresAt.IsZero() && !now.Before(sess.ExpiresAt) {
-		// Expiry decides the result even if the best-effort cleanup fails.
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE id = ?`, sess.ID); err != nil {
+	sess.CreatedAt, sess.LastUsedAt = parseTime(created), parseTime(lastUsed)
+	now := s.now().UTC().Truncate(time.Second)
+	life := s.lifetimes.Lifetime(sess.Kind)
+	if life.Expired(sess.CreatedAt, sess.LastUsedAt, now) {
+		// Don't delete a row that an in-flight request just touched, or a
+		// replacement that reused its ID. A cleanup failure is still a miss.
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE id = ? AND token_hash = ? AND last_used_at = ?`,
+			sess.ID, hash, lastUsed); err != nil {
 			slog.ErrorContext(ctx, "delete expired session", "err", err)
 		}
 		return User{}, Session{}, ErrNotFound
 	}
-	if now.Sub(sess.LastUsedAt) >= touchInterval {
-		if !sess.ExpiresAt.IsZero() {
-			sess.ExpiresAt = now.Add(WebSessionTTL)
-		}
-		sess.LastUsedAt = now
-		if _, err := s.db.ExecContext(ctx, `UPDATE auth_sessions SET last_used_at = ?, expires_at = ? WHERE id = ?`,
-			timestamp(now), timestamp(sess.ExpiresAt), sess.ID); err != nil {
+	if session.NeedsTouchAfter(sess.LastUsedAt, now, touchInterval) {
+		// The predicate enforces the hourly throttle under concurrency and
+		// repairs timestamps left by a clock that was ahead.
+		res, err := s.db.ExecContext(ctx, `UPDATE auth_sessions SET last_used_at = ?, expires_at = ?
+			WHERE id = ? AND token_hash = ? AND (last_used_at <= ? OR last_used_at > ?)`,
+			timestamp(now), timestamp(life.ExpiresAt(sess.CreatedAt, now)), sess.ID, hash,
+			timestamp(now.Add(-touchInterval)), timestamp(now))
+		if err != nil {
 			slog.ErrorContext(ctx, "touch session", "err", err)
+		} else if n, _ := res.RowsAffected(); n != 0 {
+			sess.LastUsedAt = now
 		}
 	}
+	sess.ExpiresAt = life.ExpiresAt(sess.CreatedAt, sess.LastUsedAt)
 	u, err := s.ByID(ctx, sess.UserID)
 	if err != nil {
 		return User{}, Session{}, err
@@ -127,9 +150,9 @@ func (s *Store) Authenticate(ctx context.Context, token string) (User, Session, 
 
 // Sessions lists a user's live sessions, most recently used first.
 func (s *Store) Sessions(ctx context.Context, userID int64) ([]Session, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, kind, label, created_at, last_used_at, expires_at
-		FROM auth_sessions WHERE user_id = ? AND (expires_at = '' OR expires_at > ?)
-		ORDER BY last_used_at DESC, id DESC`, userID, timestamp(s.now()))
+	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, kind, label, created_at, last_used_at
+		FROM auth_sessions WHERE user_id = ? AND NOT `+expiredSessions+`
+		ORDER BY last_used_at DESC, id DESC`, append([]any{userID}, s.expiryCutoffs()...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -137,11 +160,12 @@ func (s *Store) Sessions(ctx context.Context, userID int64) ([]Session, error) {
 	var out []Session
 	for rows.Next() {
 		var sess Session
-		var created, lastUsed, expires string
-		if err := rows.Scan(&sess.ID, &sess.UserID, &sess.Kind, &sess.Label, &created, &lastUsed, &expires); err != nil {
+		var created, lastUsed string
+		if err := rows.Scan(&sess.ID, &sess.UserID, &sess.Kind, &sess.Label, &created, &lastUsed); err != nil {
 			return nil, err
 		}
-		sess.CreatedAt, sess.LastUsedAt, sess.ExpiresAt = parseTime(created), parseTime(lastUsed), parseTime(expires)
+		sess.CreatedAt, sess.LastUsedAt = parseTime(created), parseTime(lastUsed)
+		sess.ExpiresAt = s.lifetimes.Lifetime(sess.Kind).ExpiresAt(sess.CreatedAt, sess.LastUsedAt)
 		out = append(out, sess)
 	}
 	return out, rows.Err()
@@ -166,10 +190,25 @@ func (s *Store) RevokeAll(ctx context.Context, userID int64) error {
 	return err
 }
 
-// DeleteExpired removes web sessions past their expiry; the background sweep
-// calls it so abandoned sign-ins do not accumulate.
+// expiredSessions mirrors Lifetime.Expired using fixed-width UTC timestamps.
+// max floors last use at creation: repairing a clock ahead of ours can leave
+// last_used_at earlier than created_at. expires_at is for older binaries only.
+const expiredSessions = `((kind = ? AND (created_at <= ? OR max(created_at, last_used_at) <= ?))
+	OR (kind = ? AND (created_at <= ? OR max(created_at, last_used_at) <= ?)))`
+
+func (s *Store) expiryCutoffs() []any {
+	now := s.now()
+	web, device := s.lifetimes.Web, s.lifetimes.Device
+	return []any{
+		KindWeb, timestamp(now.Add(-web.Absolute)), timestamp(now.Add(-web.Idle)),
+		KindDevice, timestamp(now.Add(-device.Absolute)), timestamp(now.Add(-device.Idle)),
+	}
+}
+
+// DeleteExpired sweeps both credential kinds and returns the number removed.
+// Request-time checks don't wait for the background sweep to reject a token.
 func (s *Store) DeleteExpired(ctx context.Context) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE expires_at != '' AND expires_at <= ?`, timestamp(s.now()))
+	res, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE `+expiredSessions, s.expiryCutoffs()...)
 	if err != nil {
 		return 0, err
 	}

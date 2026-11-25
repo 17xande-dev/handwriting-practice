@@ -41,6 +41,51 @@ func TestLoadOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadSessionLifetimes(t *testing.T) {
+	const day = 24 * time.Hour
+	policies := []struct {
+		name string
+		env  map[string]string
+		want [4]time.Duration
+	}{
+		{"defaults", nil, [4]time.Duration{30 * day, 90 * day, 90 * day, 365 * day}},
+		{"independent overrides", map[string]string{
+			"SESSION_IDLE": "1h30m", "SESSION_ABSOLUTE": "8h",
+			"DEVICE_SESSION_IDLE": "240h", "DEVICE_SESSION_ABSOLUTE": "480h",
+		}, [4]time.Duration{90 * time.Minute, 8 * time.Hour, 10 * day, 20 * day}},
+	}
+	for _, tc := range policies {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := Load(env(tc.env))
+			if err != nil {
+				t.Fatal(err)
+			}
+			web, device := c.Lifetimes.Web, c.Lifetimes.Device
+			if got := [4]time.Duration{web.Idle, web.Absolute, device.Idle, device.Absolute}; got != tc.want || web.IdleOff || device.IdleOff {
+				t.Fatalf("lifetimes = %+v, want %v and neither idle limit off", c.Lifetimes, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, key, value string }{
+		{"zero", "SESSION_IDLE", "0s"},
+		{"negative", "SESSION_ABSOLUTE", "-1h"},
+		{"whitespace", "DEVICE_SESSION_IDLE", " 24h"},
+		{"bare number", "DEVICE_SESSION_ABSOLUTE", "365"},
+		{"day unit", "SESSION_IDLE", "30d"},
+		{"subsecond", "DEVICE_SESSION_IDLE", "1.5s"},
+		{"overflow", "DEVICE_SESSION_ABSOLUTE", "999999999999h"},
+		{"web idle exceeds absolute", "SESSION_IDLE", "3000h"},
+		{"device absolute below idle", "DEVICE_SESSION_ABSOLUTE", "24h"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(env(map[string]string{tc.key: tc.value}))
+			if err == nil || !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("want an error naming %s, got %v", tc.key, err)
+			}
+		})
+	}
+}
+
 // Every bad value is reported together, so an operator fixes a deployment in
 // one pass rather than one restart per mistake.
 func TestLoadReportsAllErrors(t *testing.T) {

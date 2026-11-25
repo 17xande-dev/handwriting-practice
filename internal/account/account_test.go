@@ -15,7 +15,7 @@ var ctx = context.Background()
 
 func newStore(t *testing.T) *Store {
 	t.Helper()
-	return NewStore(dbtest.New(t))
+	return NewStore(dbtest.New(t), DefaultLifetimes())
 }
 
 func mustCreate(t *testing.T, s *Store, email string, admin bool) User {
@@ -126,38 +126,41 @@ func TestDisableEndsSessions(t *testing.T) {
 	}
 }
 
-func TestWebSessionExpiresAndSlides(t *testing.T) {
+func TestTouchDoesNotExtendAbsoluteDeadline(t *testing.T) {
 	s := newStore(t)
 	u := mustCreate(t, s, "u@x.com", false)
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
-	tok, _, _ := s.CreateSession(ctx, u.ID, KindWeb, "")
-
-	// Used just before expiry: the window slides forward from that use.
-	now = now.Add(WebSessionTTL - time.Hour)
-	if _, _, err := s.Authenticate(ctx, tok); err != nil {
-		t.Fatalf("before expiry: %v", err)
+	tok, sess, err := s.SignIn(ctx, u, KindWeb, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	now = now.Add(WebSessionTTL - time.Hour)
-	if _, _, err := s.Authenticate(ctx, tok); err != nil {
-		t.Fatalf("after sliding: %v", err)
+	absolute := now.Add(90 * 24 * time.Hour)
+	read := func() (string, string) {
+		t.Helper()
+		var lastUsed, expires string
+		if err := s.db.QueryRow(`SELECT last_used_at, expires_at FROM auth_sessions WHERE id = ?`, sess.ID).
+			Scan(&lastUsed, &expires); err != nil {
+			t.Fatal(err)
+		}
+		return lastUsed, expires
 	}
-	now = now.Add(WebSessionTTL + time.Hour)
+	if last, expiry := read(); last != timestamp(now) || expiry != timestamp(now.Add(30*24*time.Hour)) {
+		t.Fatalf("new row: last use %s, expiry %s", last, expiry)
+	}
+	for _, days := range []int{29, 58, 87} {
+		now = sess.CreatedAt.Add(time.Duration(days) * 24 * time.Hour)
+		if _, _, err := s.Authenticate(ctx, tok); err != nil {
+			t.Fatalf("day %d: %v", days, err)
+		}
+		want := min(now.Add(30*24*time.Hour).Unix(), absolute.Unix())
+		if last, expiry := read(); last != timestamp(now) || expiry != timestamp(time.Unix(want, 0)) {
+			t.Fatalf("day %d: last use %s, expiry %s, want expiry %s", days, last, expiry, timestamp(time.Unix(want, 0)))
+		}
+	}
+	now = absolute
 	if _, _, err := s.Authenticate(ctx, tok); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expired session accepted: %v", err)
-	}
-}
-
-// A device stays signed in until revoked, however long it sits unused.
-func TestDeviceSessionDoesNotExpire(t *testing.T) {
-	s := newStore(t)
-	u := mustCreate(t, s, "u@x.com", false)
-	now := time.Now()
-	s.now = func() time.Time { return now }
-	tok, _, _ := s.CreateSession(ctx, u.ID, KindDevice, "iPad")
-	now = now.Add(5 * 365 * 24 * time.Hour)
-	if _, _, err := s.Authenticate(ctx, tok); err != nil {
-		t.Errorf("device session expired: %v", err)
+		t.Fatalf("session accepted at its absolute deadline: %v", err)
 	}
 }
 
@@ -180,11 +183,59 @@ func TestRevokeIsScopedToOwner(t *testing.T) {
 func TestListCountsLiveSessions(t *testing.T) {
 	s := newStore(t)
 	u := mustCreate(t, s, "u@x.com", false)
-	s.CreateSession(ctx, u.ID, KindWeb, "")
-	s.CreateSession(ctx, u.ID, KindDevice, "iPad")
+	now := s.Now().UTC().Truncate(time.Second)
+	s.now = func() time.Time { return now }
+	s.CreateSession(ctx, u.ID, KindWeb, "browser")
+	s.CreateSession(ctx, u.ID, KindDevice, "live iPad")
+	_, old, err := s.CreateSession(ctx, u.ID, KindDevice, "idle iPad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stale values left by the previous binary: the active rows appear
+	// expired, and the idle device has no stored expiry at all.
+	if _, err := s.db.Exec(`UPDATE auth_sessions SET expires_at = ?`, timestamp(now.Add(-time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	idle := timestamp(now.Add(-90 * 24 * time.Hour))
+	if _, err := s.db.Exec(`UPDATE auth_sessions SET created_at = ?, last_used_at = ?, expires_at = '' WHERE id = ?`,
+		idle, idle, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := s.Sessions(ctx, u.ID)
+	if err != nil || len(sessions) != 2 || sessions[0].Label != "live iPad" || sessions[1].Label != "browser" {
+		t.Errorf("Sessions = %+v, %v; want only the live iPad and browser, newest first", sessions, err)
+	}
 	list, err := s.List(ctx)
 	if err != nil || len(list) != 1 || list[0].Sessions != 2 {
 		t.Fatalf("list = %+v, %v", list, err)
+	}
+}
+
+func TestExpiryFloorsLastUseAtCreation(t *testing.T) {
+	s := newStore(t)
+	u := mustCreate(t, s, "u@x.com", false)
+	now := s.Now().UTC().Truncate(time.Second)
+	s.now = func() time.Time { return now }
+	tok, sess, err := s.SignIn(ctx, u, KindWeb, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A clock moved back after sign-in. Authentication repairs last use;
+	// the list and sweep must keep that session until creation + idle.
+	now = now.Add(-2 * time.Hour)
+	if _, _, err := s.Authenticate(ctx, tok); err != nil {
+		t.Fatal(err)
+	}
+	now = sess.CreatedAt.Add(30*24*time.Hour - time.Hour)
+	if n, err := s.DeleteExpired(ctx); n != 0 || err != nil {
+		t.Fatalf("sweep before idle deadline removed %d: %v", n, err)
+	}
+	if rows, err := s.Sessions(ctx, u.ID); len(rows) != 1 || err != nil {
+		t.Fatalf("list before idle deadline returned %d sessions: %v", len(rows), err)
+	}
+	now = now.Add(time.Hour)
+	if n, err := s.DeleteExpired(ctx); n != 1 || err != nil {
+		t.Fatalf("sweep at idle deadline removed %d: %v", n, err)
 	}
 }
 

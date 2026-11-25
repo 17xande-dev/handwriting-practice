@@ -37,3 +37,21 @@ func TestInvalidBaseURLStopsStartupBeforeDatabaseOpen(t *testing.T) {
 		}
 	}
 }
+
+func TestInvalidSessionLifetimeStopsStartupBeforeMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "not-opened.db")
+	for _, key := range []string{"HSTS", "COOKIE_SECURE", "BASE_URL", "SHUTDOWN_TIMEOUT", "CLIENT_IP_HEADER", "SESSION_IDLE", "SESSION_ABSOLUTE", "DEVICE_SESSION_IDLE"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("DEVICE_SESSION_ABSOLUTE", "1h") // shorter than the default idle limit
+	t.Setenv("DB_PATH", dbPath)
+	t.Setenv("ADDR", "invalid-listen-address")
+	if err := run(quietLog()); err == nil || !strings.Contains(err.Error(), "DEVICE_SESSION_ABSOLUTE") {
+		t.Errorf("want a device lifetime error, got %v", err)
+	}
+	for _, name := range []string{dbPath, dbPath + ".migrate-lock"} {
+		if _, err := os.Stat(name); !os.IsNotExist(err) {
+			t.Errorf("startup touched %s before validating the session policy (stat err: %v)", name, err)
+		}
+	}
+}

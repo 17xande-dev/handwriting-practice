@@ -15,6 +15,10 @@ services:
       HSTS: "${HSTS:-0}"
       COOKIE_SECURE: "${COOKIE_SECURE:-1}"
       BASE_URL: "${BASE_URL:-}"
+      SESSION_IDLE: "${SESSION_IDLE:-720h}"
+      SESSION_ABSOLUTE: "${SESSION_ABSOLUTE:-2160h}"
+      DEVICE_SESSION_IDLE: "${DEVICE_SESSION_IDLE:-2160h}"
+      DEVICE_SESSION_ABSOLUTE: "${DEVICE_SESSION_ABSOLUTE:-8760h}"
       # Behind a reverse proxy every connection comes from the proxy, so the
       # per-IP sign-in limit would be one bucket shared by everyone. Name the
       # header your proxy sets. Prefer a single-value one the proxy overwrites

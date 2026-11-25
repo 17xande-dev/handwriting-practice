@@ -35,16 +35,21 @@ type User struct {
 
 // Store is the users and sessions tables.
 type Store struct {
-	db  *sql.DB
-	now func() time.Time
+	db        *sql.DB
+	now       func() time.Time
+	lifetimes Lifetimes
 }
 
-func NewStore(db *sql.DB) *Store {
-	return &Store{db: db, now: time.Now}
+// NewStore takes the policies already validated by startup configuration.
+func NewStore(db *sql.DB, lifetimes Lifetimes) *Store {
+	return &Store{db: db, now: time.Now, lifetimes: lifetimes}
 }
 
 // Now gives the HTTP cookie policy the same clock as the session store.
 func (s *Store) Now() time.Time { return s.now() }
+
+// Lifetimes returns a copy of the configured policies.
+func (s *Store) Lifetimes() Lifetimes { return s.lifetimes }
 
 // timestamp is how every time is stored: SQLite has no datetime type, and
 // RFC3339 in UTC sorts and compares correctly as text.
@@ -128,8 +133,8 @@ type UserSummary struct {
 func (s *Store) List(ctx context.Context) ([]UserSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+userColumns+`,
 		(SELECT count(*) FROM auth_sessions a WHERE a.user_id = users.id
-		   AND (a.expires_at = '' OR a.expires_at > ?))
-		FROM users ORDER BY is_admin DESC, email`, timestamp(s.now()))
+		   AND NOT `+expiredSessions+`)
+		FROM users ORDER BY is_admin DESC, email`, s.expiryCutoffs()...)
 	if err != nil {
 		return nil, err
 	}

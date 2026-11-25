@@ -57,6 +57,10 @@ env:
     HSTS: "1"
     COOKIE_SECURE: "1"
     BASE_URL: https://handwriting.17xande.dev
+    SESSION_IDLE: "720h"
+    SESSION_ABSOLUTE: "2160h"
+    DEVICE_SESSION_IDLE: "2160h"
+    DEVICE_SESSION_ABSOLUTE: "8760h"
     # Cloudflare overwrites this header with the connecting address, which is
     # why it is preferred over X-Forwarded-For (a list a client can prepend
     # to). Safe only while the shared tunnel is the sole way in: kamal-proxy

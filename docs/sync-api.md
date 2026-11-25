@@ -250,11 +250,18 @@ time of the last edit in ms (so the last writer wins), `v` is 1.
   it. Cross-site requests are refused (403) by the server's cross-origin protection. The cookie is
   `Secure`: browsers accept it from `https://` and from `http://localhost`, but not from a
   plain-HTTP LAN address, so web sign-in needs HTTPS (or localhost). The iPad app uses a bearer
-  token and does not.
-- **App:** `Authorization: Bearer <token>`, from `POST /api/token`. A token lasts until it's
-  revoked: by signing out in the app, by "Sign out" on the account page's device list, by an admin,
-  by a password change or reset, or by the account being disabled or deleted. After any of these,
-  every request answers 401.
+  token and does not. A browser sign-in ends after 30 days unused or 90 days from sign-in by
+  default, whichever comes first.
+- **App:** `Authorization: Bearer <token>`, from `POST /api/token`. By default a token expires
+  after 90 days unused or 365 days from sign-in, whichever comes first. It can also be revoked
+  by signing out in the app, by "Sign out" on the account page's device list, by an admin,
+  by a password change or reset, or by the account being disabled or deleted. An expired or
+  revoked token gets `401` on authenticated endpoints. Sign in again to get a new token; on
+  `401` the current client keeps local history and clears its token and sync state (see below).
+
+The server can configure the limits in the README config table. Last use is recorded at most
+hourly, so idle expiry can arrive up to an hour early. Activity never extends the absolute limit,
+and neither an existing token nor a new one is rotated automatically.
 
 Accounts are created by an admin at `/admin/users`, or the first one with
 `calligraphy -add-admin

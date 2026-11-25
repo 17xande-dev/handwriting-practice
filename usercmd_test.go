@@ -17,7 +17,7 @@ var printedPassword = regexp.MustCompile(`\(shown once\): (\S+)`)
 // account actually accepts.
 func TestAddAdminPrintsAWorkingPassword(t *testing.T) {
 	ctx := context.Background()
-	store := account.NewStore(dbtest.New(t))
+	store := account.NewStore(dbtest.New(t), account.DefaultLifetimes())
 	var out bytes.Buffer
 	if err := addAdmin(ctx, store, "Boss@Example.com", &out); err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestAddAdminPrintsAWorkingPassword(t *testing.T) {
 
 func TestResetPasswordReplacesIt(t *testing.T) {
 	ctx := context.Background()
-	store := account.NewStore(dbtest.New(t))
+	store := account.NewStore(dbtest.New(t), account.DefaultLifetimes())
 	addAdmin(ctx, store, "a@x.com", &bytes.Buffer{})
 	var out bytes.Buffer
 	if err := resetPassword(ctx, store, "a@x.com", &out); err != nil {

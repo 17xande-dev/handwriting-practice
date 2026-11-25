@@ -40,7 +40,7 @@ func testOptionsDB(t testing.TB, list []fonts.Font) (Options, *sql.DB) {
 	d := dbtest.New(t)
 	return Options{
 		Fonts: list, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Accounts: account.NewStore(d), History: history.NewStore(d), CookieSecure: true,
+		Accounts: account.NewStore(d, account.DefaultLifetimes()), History: history.NewStore(d), CookieSecure: true,
 	}, d
 }
 

@@ -47,7 +47,7 @@ func TestMaintainTakesABackupAndRemovesOldPartials(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
-		maintain(ctx, quietLog(), d, account.NewStore(d), dbPath)
+		maintain(ctx, quietLog(), d, account.NewStore(d, account.DefaultLifetimes()), dbPath)
 		close(done)
 	}()
 	want := filepath.Join(bdir, "handwriting-"+time.Now().UTC().Format("20060102")+".db")
@@ -72,5 +72,43 @@ func TestMaintainTakesABackupAndRemovesOldPartials(t *testing.T) {
 	}
 	if _, err := os.Stat(foreign); err != nil {
 		t.Error("notes.partial was removed: the glob is too wide")
+	}
+}
+
+func TestMaintainSweepsExpiredDevicesAtStartup(t *testing.T) {
+	d := dbtest.New(t)
+	store := account.NewStore(d, account.DefaultLifetimes())
+	user, err := store.Create(t.Context(), "suite@example.test", "unused hash", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	created := now.Add(-366 * 24 * time.Hour).Format(time.RFC3339)
+	// Seed a legacy device without a stored expiry; the real maintenance
+	// loop must delete it before waiting for the next daily tick.
+	if _, err := d.Exec(`INSERT INTO auth_sessions (token_hash, user_id, kind, created_at, last_used_at)
+		VALUES (?, ?, 'device', ?, ?)`, "fixture hash", user.ID, created, now.Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	dbPath := filepath.Join(t.TempDir(), "handwriting.db")
+	go func() {
+		defer close(done)
+		maintain(ctx, quietLog(), d, store, dbPath)
+	}()
+	defer func() { cancel(); <-done }()
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		var n int
+		if err := d.QueryRow(`SELECT count(*) FROM auth_sessions`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("startup maintenance did not remove the expired device")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

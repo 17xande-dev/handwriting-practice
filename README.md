@@ -174,8 +174,16 @@ the device.
 | `HSTS` | `0` | Set to `1` only for an HTTPS deployment. |
 | `COOKIE_SECURE` | `1` | Set to `0` only for trusted plain-HTTP development. The cookie policy never uses forwarded scheme headers. |
 | `BASE_URL` | Unset | Optional exact browser origin: lowercase `scheme://host[:port]`, no path, trailing slash, query, fragment, credentials, or default port. `http://` is only accepted with `COOKIE_SECURE=0`. A bad value stops startup before the database is opened. |
+| `SESSION_IDLE` | `720h` (30 days) | Browser sign-in inactivity limit. |
+| `SESSION_ABSOLUTE` | `2160h` (90 days) | Maximum browser sign-in age, counted from sign-in. |
+| `DEVICE_SESSION_IDLE` | `2160h` (90 days) | iPad bearer token inactivity limit. |
+| `DEVICE_SESSION_ABSOLUTE` | `8760h` (365 days) | Maximum iPad bearer token age, counted from sign-in. |
 | `CLIENT_IP_HEADER` | Unset (socket peer) | Trust this header only when all requests come through the proxy that sets it; see below. |
 | `SHUTDOWN_TIMEOUT` | `10s` | How long to wait for requests in flight on shutdown. |
+
+Session limits are positive, whole-second Go durations (use hours for days,
+e.g. `720h` rather than `30d`). Neither idle limit may exceed its absolute
+limit. Invalid settings stop startup before opening or migrating the database.
 
 Nonempty boolean settings accept only `1`, `0`, `true`, and `false`. For plain-HTTP Compose
 development, use `docker compose -f compose.yaml -f compose.local.yaml up --build`;
@@ -329,10 +337,15 @@ devices at `/account`.
   state, and every sync request names the account it expects (`409` on a
   mismatch), so a shared browser cannot push one person's history into
   another's account.
-- **Cookie.** Host-only, `HttpOnly` and `SameSite=Lax`. The browser cookie
-  expires 90 days after sign-in, even if activity extends the database
-  session. Plain-HTTP development with `COOKIE_SECURE=0` uses the unprefixed
-  `hp_session`; the iPad bearer token does not use either cookie.
+- **Sessions.** By default a browser sign-in ends after 30 days unused or
+  90 days total, and an iPad bearer token after 90 days unused or 365 days
+  total. Activity does not extend the absolute deadline. Last use is recorded
+  at most hourly, so idle expiry can arrive up to an hour early. The policy
+  applies to existing sessions using their original creation and last-use
+  times; there is no database migration. The host-only, `HttpOnly`,
+  `SameSite=Lax` browser cookie expires at the absolute deadline. Plain-HTTP
+  development with `COOKIE_SECURE=0` uses the unprefixed `hp_session`; the
+  iPad bearer token does not use either cookie.
 - **State changes** pass `http.CrossOriginProtection`, the CSRF defence for the
   forms and the API alike. The strict CSP is unchanged: no inline styles or
   scripts, and a test checks the account and admin pages for them.

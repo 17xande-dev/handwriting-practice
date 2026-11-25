@@ -8,8 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"calligraphy/internal/account"
+
 	"github.com/17xande-dev/ratelimit/clientip"
 	"github.com/17xande-dev/websec/csrf"
+	"github.com/17xande-dev/websec/session"
 )
 
 // Config is the whole runtime configuration.
@@ -28,6 +31,9 @@ type Config struct {
 
 	// BaseURL is the optional, canonical browser-facing origin.
 	BaseURL string
+
+	// Lifetimes applies to new as well as previously issued credentials.
+	Lifetimes account.Lifetimes
 
 	// ShutdownTimeout bounds how long in-flight requests get on SIGTERM.
 	ShutdownTimeout time.Duration
@@ -87,6 +93,35 @@ func Load(getenv func(string) string) (Config, error) {
 			errs = append(errs, fmt.Sprintf("BASE_URL: %v", err))
 		}
 	}
+
+	c.Lifetimes = account.DefaultLifetimes()
+	loadLifetime := func(prefix string, life *session.Lifetime) {
+		valid := true
+		for _, entry := range []struct {
+			key string
+			dst *time.Duration
+		}{
+			{prefix + "_IDLE", &life.Idle},
+			{prefix + "_ABSOLUTE", &life.Absolute},
+		} {
+			if v := getenv(entry.key); v != "" {
+				d, err := time.ParseDuration(v)
+				if err != nil || d <= 0 || d%time.Second != 0 {
+					errs = append(errs, entry.key+": want a positive whole-second Go duration such as 720h")
+					valid = false
+				} else {
+					*entry.dst = d
+				}
+			}
+		}
+		if valid {
+			if err := life.Validate(); err != nil {
+				errs = append(errs, fmt.Sprintf("%s_IDLE / %s_ABSOLUTE: %v", prefix, prefix, err))
+			}
+		}
+	}
+	loadLifetime("SESSION", &c.Lifetimes.Web)
+	loadLifetime("DEVICE_SESSION", &c.Lifetimes.Device)
 
 	if v := getenv("SHUTDOWN_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
