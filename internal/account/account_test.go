@@ -296,3 +296,116 @@ func TestSessionLabelTruncatesByRunes(t *testing.T) {
 		t.Errorf("label has %d runes, valid=%v; want 100 whole runes", utf8.RuneCountInString(sess.Label), utf8.ValidString(sess.Label))
 	}
 }
+
+// seedSession inserts one session of a kind with exact timestamps, bypassing
+// sign-in, and returns its token.
+func seedSession(t *testing.T, s *Store, userID int64, kind string, created, last time.Time) string {
+	t.Helper()
+	tok, sess, err := s.CreateSession(ctx, userID, kind, "seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE auth_sessions SET created_at = ?, last_used_at = ?, expires_at = '' WHERE id = ?`,
+		timestamp(created), timestamp(last), sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// The SQL predicate behind Sessions, List and the sweep must flip at exactly
+// the deadline, at second precision, for each kind and each of its three
+// clauses: absolute, idle, and the floor that keeps a last use earlier than
+// creation from expiring a session early.
+func TestSQLDeadlinesAtTheSecond(t *testing.T) {
+	const second = time.Second
+	for _, kind := range []string{KindWeb, KindDevice} {
+		life := DefaultLifetimes().Lifetime(kind)
+		abs, idle := life.Absolute, life.Idle
+		now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+		for _, tc := range []struct {
+			name          string
+			created, last time.Duration // ages before now
+			live          bool
+		}{
+			{"absolute limit-1s", abs - second, 0, true},
+			{"absolute limit", abs, 0, false},
+			{"absolute limit+1s", abs + second, 0, false},
+			{"idle limit-1s", idle + time.Hour, idle - second, true},
+			{"idle limit", idle + time.Hour, idle, false},
+			{"idle limit+1s", idle + time.Hour, idle + second, false},
+			// last use before creation: the floor makes creation the last use.
+			{"floor idle limit-1s", idle - second, idle + time.Hour, true},
+			{"floor idle limit", idle, idle + time.Hour, false},
+			{"floor idle limit+1s", idle + second, idle + time.Hour, false},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				s := newStore(t)
+				s.now = func() time.Time { return now }
+				u := mustCreate(t, s, "u@x.com", false)
+				tok := seedSession(t, s, u.ID, kind, now.Add(-tc.created), now.Add(-tc.last))
+
+				rows, err := s.Sessions(ctx, u.ID)
+				if err != nil || (len(rows) == 1) != tc.live {
+					t.Errorf("Sessions returned %d rows (err %v), live = %t", len(rows), err, tc.live)
+				}
+				list, err := s.List(ctx)
+				if err != nil || len(list) != 1 || (list[0].Sessions == 1) != tc.live {
+					t.Errorf("List = %+v (err %v), live = %t", list, err, tc.live)
+				}
+				// The Go-side check must agree with the SQL one.
+				if _, _, err := s.Authenticate(ctx, tok); (err == nil) != tc.live {
+					t.Errorf("Authenticate err = %v, live = %t", err, tc.live)
+				}
+				// Re-seed: Authenticate may already have deleted an expired row.
+				s.RevokeAll(ctx, u.ID)
+				seedSession(t, s, u.ID, kind, now.Add(-tc.created), now.Add(-tc.last))
+				n, err := s.DeleteExpired(ctx)
+				if want := int64(map[bool]int{true: 0, false: 1}[tc.live]); err != nil || n != want {
+					t.Errorf("DeleteExpired removed %d (err %v), want %d", n, err, want)
+				}
+			})
+		}
+	}
+}
+
+// The hourly touch is decided in Go and enforced again in the UPDATE; both
+// must agree at the second, or a session is touched twice in an hour or not
+// when it should be.
+func TestTouchThrottleAtTheSecond(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	for _, kind := range []string{KindWeb, KindDevice} {
+		for _, tc := range []struct {
+			name    string
+			last    time.Time
+			touched bool
+		}{
+			{"interval-1s", now.Add(-time.Hour + time.Second), false},
+			{"interval", now.Add(-time.Hour), true},
+			{"interval+1s", now.Add(-time.Hour - time.Second), true},
+			{"now", now, false},
+			{"future by 1s", now.Add(time.Second), true},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				s := newStore(t)
+				s.now = func() time.Time { return now }
+				u := mustCreate(t, s, "u@x.com", false)
+				created := now.Add(-2 * time.Hour)
+				tok := seedSession(t, s, u.ID, kind, created, tc.last)
+				if _, _, err := s.Authenticate(ctx, tok); err != nil {
+					t.Fatal(err)
+				}
+				var last string
+				if err := s.db.QueryRow(`SELECT last_used_at FROM auth_sessions`).Scan(&last); err != nil {
+					t.Fatal(err)
+				}
+				want := timestamp(tc.last)
+				if tc.touched {
+					want = timestamp(now)
+				}
+				if last != want {
+					t.Errorf("last_used_at = %s, want %s", last, want)
+				}
+			})
+		}
+	}
+}
