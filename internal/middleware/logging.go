@@ -34,9 +34,15 @@ func Logging(log *slog.Logger) Middleware {
 			if strings.HasPrefix(r.URL.Path, "/static/") && rec.status < 400 {
 				return
 			}
+			path := r.URL.Path
+			if rec.status == http.StatusForbidden && r.Pattern == "" {
+				// A refusal before routing already has a security log. Don't
+				// leak the rejected path through the separate access log.
+				path = "unmatched"
+			}
 			log.Info("request",
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", path,
 				"status", rec.status,
 				"dur", time.Since(start).Round(time.Microsecond))
 		})

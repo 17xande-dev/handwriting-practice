@@ -41,13 +41,13 @@ func apiError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// bearer returns the token from an Authorization: Bearer header, or "".
-func bearer(r *http.Request) string {
-	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") {
-		return ""
+// bearer distinguishes an empty Bearer credential from an absent one.
+func bearer(r *http.Request) (token string, present bool) {
+	scheme, token, _ := strings.Cut(strings.TrimSpace(r.Header.Get("Authorization")), " ")
+	if !strings.EqualFold(scheme, "Bearer") {
+		return "", false
 	}
-	return strings.TrimSpace(token)
+	return strings.TrimSpace(token), true
 }
 
 // errNotSignedIn means the request has no live credentials (401). Any other
@@ -55,16 +55,19 @@ func bearer(r *http.Request) string {
 // is dead" and throw it away, so a passing database error must not become one.
 var errNotSignedIn = errors.New("not signed in")
 
-// apiUser authenticates an API request by bearer token or, failing that,
-// the browser's cookie.
+// apiUser uses the browser cookie only when no Bearer credential was sent.
+// A malformed device request must not act on a browser's signed-in account.
 func (s *Server) apiUser(r *http.Request) (account.User, account.Session, error) {
-	tok := bearer(r)
-	if tok == "" {
+	tok, hasBearer := bearer(r)
+	if !hasBearer {
 		var ok bool
 		tok, ok = s.session.Value(r)
 		if !ok {
 			return account.User{}, account.Session{}, errNotSignedIn
 		}
+	}
+	if tok == "" {
+		return account.User{}, account.Session{}, errNotSignedIn
 	}
 	u, sess, err := s.accounts.Authenticate(r.Context(), tok)
 	if errors.Is(err, account.ErrNotFound) {

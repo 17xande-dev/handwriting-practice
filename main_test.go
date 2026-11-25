@@ -3,12 +3,19 @@ package main
 import (
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"calligraphy/internal/account"
 	"calligraphy/internal/auth"
+	"calligraphy/internal/config"
+	"calligraphy/internal/dbtest"
+	"calligraphy/internal/history"
+
+	"github.com/17xande-dev/websec/webtest"
 )
 
 // Real argon2 costs ~100ms and 64 MiB per hash; these tests hash and
@@ -36,6 +43,28 @@ func TestInvalidBaseURLStopsStartupBeforeDatabaseOpen(t *testing.T) {
 			t.Errorf("startup touched %s before validating BASE_URL (stat err: %v)", name, err)
 		}
 	}
+}
+
+func TestTrustedOriginSurvivesHostRewrite(t *testing.T) {
+	const publicOrigin = "https://practice.example"
+	cfg, err := config.Load(func(key string) string {
+		if key == "BASE_URL" {
+			return publicOrigin
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := dbtest.New(t)
+	h, err := newSiteHandler(cfg, quietLog(), account.NewStore(d, cfg.Lifetimes), history.NewStore(d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := webtest.New(t, h, "http://internal.example", webtest.WithOrigin(publicOrigin))
+	// Without Sec-Fetch-Site, the different Host would fail Go's default check.
+	c.PostForm("/practice/new", nil).WantStatus(http.StatusOK)
+	c.PostForm("/practice/new", nil, webtest.WithOrigin("https://elsewhere.example")).WantStatus(http.StatusForbidden)
 }
 
 func TestInvalidSessionLifetimeStopsStartupBeforeMigration(t *testing.T) {

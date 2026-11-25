@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	"calligraphy/internal/account"
@@ -49,6 +50,9 @@ type Options struct {
 
 	// CookieSecure comes from configuration, not the request or proxy headers.
 	CookieSecure bool
+
+	// BaseURL is the validated public origin, independent of the proxy's Host.
+	BaseURL string
 }
 
 // Server holds everything a request needs; it is built once at startup.
@@ -63,6 +67,7 @@ type Server struct {
 	clientIP clientip.Source
 	limits   limits
 	session  *cookie.Cookie
+	handler  http.Handler
 }
 
 // limits are the rate limits on everything that verifies a password. Each
@@ -183,6 +188,9 @@ func newServer(o Options) (*Server, error) {
 	if s.pages, err = parsePages(a); err != nil {
 		return nil, err
 	}
+	if s.handler, err = s.buildRoutes(o.BaseURL); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -198,10 +206,43 @@ type handleFunc func(pattern string, f http.Handler)
 // defence for the forms and the API alike. A request from the iPad app
 // carries neither header and passes; it authenticates with a bearer token a
 // browser would never attach on its own.
-func (s *Server) Routes() http.Handler {
+func (s *Server) Routes() http.Handler { return s.handler }
+
+func (s *Server) buildRoutes(origin string) (http.Handler, error) {
 	mux := http.NewServeMux()
-	s.routes(func(pattern string, f http.Handler) { mux.Handle(pattern, f) })
-	return securityHeaders(s.policy, adminHeaders(http.NewCrossOriginProtection().Handler(mux)))
+	s.routes(mux.Handle)
+
+	protection := http.NewCrossOriginProtection()
+	if origin != "" {
+		// Comparing with Host alone fails for Origin-only clients behind a
+		// proxy that rewrites Host. Use the public origin from startup config.
+		if err := protection.AddTrustedOrigin(origin); err != nil {
+			return nil, fmt.Errorf("BASE_URL: %w", err)
+		}
+	}
+	protection.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reason := "Origin"
+		if r.Header.Get("Sec-Fetch-Site") != "" {
+			reason = "Sec-Fetch-Site"
+		}
+		_, pattern := mux.Handler(r)
+		// For path-cleaning redirects ServeMux can return a request path
+		// instead of a registered pattern. Only method-qualified patterns
+		// can be logged; the client may have put anything in the path.
+		if !strings.HasPrefix(pattern, r.Method+" ") {
+			pattern = "unmatched"
+		}
+		s.log.WarnContext(r.Context(), "cross-origin request refused", "method", r.Method, "route", pattern, "reason", reason)
+
+		w.Header().Set("Cache-Control", "no-store")
+		const message = "cross-origin request refused"
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			apiError(w, http.StatusForbidden, message)
+			return
+		}
+		http.Error(w, message, http.StatusForbidden)
+	}))
+	return securityHeaders(s.policy, adminHeaders(protection.Handler(mux))), nil
 }
 
 func (s *Server) routes(handle handleFunc) {

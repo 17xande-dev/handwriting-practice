@@ -91,15 +91,7 @@ func run(log *slog.Logger) error {
 	defer database.Close()
 
 	accounts := account.NewStore(database, cfg.Lifetimes)
-	h, err := handler.New(handler.Options{
-		Fonts:        fonts.Builtin,
-		Log:          log,
-		Accounts:     accounts,
-		History:      history.NewStore(database),
-		ClientIP:     cfg.ClientIP,
-		HSTS:         cfg.HSTS,
-		CookieSecure: cfg.CookieSecure,
-	})
+	h, err := newSiteHandler(cfg, log, accounts, history.NewStore(database))
 	if err != nil {
 		return err
 	}
@@ -141,6 +133,19 @@ func run(log *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+func newSiteHandler(cfg config.Config, log *slog.Logger, accounts *account.Store, records *history.Store) (http.Handler, error) {
+	return handler.New(handler.Options{
+		Fonts:        fonts.Builtin,
+		Log:          log,
+		Accounts:     accounts,
+		History:      records,
+		ClientIP:     cfg.ClientIP,
+		HSTS:         cfg.HSTS,
+		CookieSecure: cfg.CookieSecure,
+		BaseURL:      cfg.BaseURL,
+	})
 }
 
 // openMigratedDB opens the configured database and migrates it, under the
