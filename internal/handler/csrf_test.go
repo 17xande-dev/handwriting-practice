@@ -18,6 +18,11 @@ import (
 
 const csrfTestOrigin = "https://practice.example"
 
+// unsafeRoutes is the exact number of non-GET/HEAD registrations. The sweep's
+// floor equals it, so removing a route fails the test until this is lowered
+// on purpose; a new one is covered by the sweep and should raise it.
+const unsafeRoutes = 17
+
 func TestCrossOriginRouteSweep(t *testing.T) {
 	s := newAccountServer(t)
 	const email = "admin@example.com"
@@ -35,6 +40,10 @@ func TestCrossOriginRouteSweep(t *testing.T) {
 		if route.Method != http.MethodGet && route.Method != http.MethodHead {
 			unsafe = append(unsafe, route)
 		}
+	}
+
+	if len(unsafe) != unsafeRoutes {
+		t.Fatalf("%d non-GET/HEAD routes registered, the sweep expects %d: update unsafeRoutes", len(unsafe), unsafeRoutes)
 	}
 
 	// On a held, separate SQLite connection, data_version changes if any
@@ -65,7 +74,7 @@ func TestCrossOriginRouteSweep(t *testing.T) {
 				SetCookie("__Host-hp_session")
 			before := version(t)
 			checked := webtest.Sweep{
-				Routes: unsafe, Min: 16, // 17 non-GET/HEAD registrations, minus one.
+				Routes: unsafe, Min: unsafeRoutes,
 				Client: func() *webtest.Client {
 					return webtest.New(t, s.routes, csrfTestOrigin, tc.opts...)
 				},
