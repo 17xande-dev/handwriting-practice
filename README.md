@@ -14,8 +14,9 @@ make run ADDR=0.0.0.0:8083    # reachable from an iPad on the same network
 
 Then open `http://<this machine's LAN IP>:8083` in Safari on the iPad. Pointer
 Events need no secure context, so plain HTTP on the LAN is fine for writing.
-Signing in (see "Accounts and sync") needs HTTPS or `http://localhost`, because
-the session cookie is `Secure`.
+Signing in uses Secure cookies by default. For a trusted plain-HTTP development
+network only, explicitly run with `COOKIE_SECURE=0`. Never use that setting on
+a public deployment.
 
 The server needs `DB_PATH`, a SQLite file for accounts and synced history;
 `make run` defaults it to `~/.local/share/handwriting/handwriting.db`
@@ -166,9 +167,21 @@ disagree, as with looped scripts; then the slider (−20° to 30°, since some
 hands lean back) sets it by eye. The chosen font and slant are remembered on
 the device.
 
-Environment variables (`internal/config` is the complete list): `ADDR` (default `:8083`
-with `make run`; the container uses `:8080`, published on 8083 by `compose.local.yaml`),
-`DB_PATH`, `HSTS` and `CLIENT_IP_HEADER`, described under "Accounts and sync".
+| Setting | Default (server) | Purpose |
+|---|---|---|
+| `ADDR` | `:8080` | Listen address. `make run` uses `:8083`; `compose.local.yaml` publishes port 8083 by default. |
+| `DB_PATH` | Required | SQLite file for accounts and history. Compose uses `/data/handwriting.db`; `make run` sets the path shown above. |
+| `HSTS` | `0` | Set to `1` only for an HTTPS deployment. |
+| `COOKIE_SECURE` | `1` | Set to `0` only for trusted plain-HTTP development. The cookie policy never uses forwarded scheme headers. |
+| `BASE_URL` | Unset | Optional exact browser origin: lowercase `scheme://host[:port]`, no path, trailing slash, query, fragment, credentials, or default port. `http://` is only accepted with `COOKIE_SECURE=0`. A bad value stops startup before the database is opened. |
+| `CLIENT_IP_HEADER` | Unset (socket peer) | Trust this header only when all requests come through the proxy that sets it; see below. |
+| `SHUTDOWN_TIMEOUT` | `10s` | How long to wait for requests in flight on shutdown. |
+
+Nonempty boolean settings accept only `1`, `0`, `true`, and `false`. For plain-HTTP Compose
+development, use `docker compose -f compose.yaml -f compose.local.yaml up --build`;
+the override sets `COOKIE_SECURE=0` by default. `.env.example` shows local
+settings; for a proxy-facing Compose deployment keep `COOKIE_SECURE=1` and use
+the public HTTPS origin if you set `BASE_URL`.
 
 The Content-Security-Policy is built from the catalogue, plus Google Fonts'
 two origins for the picker: `style-src` and `font-src` allow those and
@@ -299,10 +312,11 @@ signed-in people change their own password and see and sign out their
 devices at `/account`.
 
 - **Sessions** are a table holding only the sha256 of an opaque token: the
-  `hp_session` cookie in a browser, a bearer token from `POST /api/token` for
+  `__Host-hp_session` cookie in a browser, a bearer token from `POST /api/token` for
   the iPad. Passwords are argon2id (12 characters minimum, nothing else). Every
   endpoint that verifies a password is rate-limited (five tries per email, keyed
-  on a hash of it, then one a minute; plus a per-IP ceiling of ten in a burst,
+  using a normalized address or a hash for long addresses, then one a minute;
+  plus a per-IP ceiling of ten in a burst,
   where an IPv6 client counts by its /64), and a failed sign-in costs the same
   whatever the cause. At most three argon2 computations run at once in the
   process; a fourth waits up to two seconds and then gets `503` with
@@ -315,9 +329,10 @@ devices at `/account`.
   state, and every sync request names the account it expects (`409` on a
   mismatch), so a shared browser cannot push one person's history into
   another's account.
-- **Cookie.** `Secure`, `HttpOnly`, `SameSite=Lax`. Browsers accept a `Secure`
-  cookie from `https://` and from `http://localhost`, so local development
-  works; a plain-HTTP LAN address cannot sign in on the web (the app can).
+- **Cookie.** Host-only, `HttpOnly` and `SameSite=Lax`. The browser cookie
+  expires 90 days after sign-in, even if activity extends the database
+  session. Plain-HTTP development with `COOKIE_SECURE=0` uses the unprefixed
+  `hp_session`; the iPad bearer token does not use either cookie.
 - **State changes** pass `http.CrossOriginProtection`, the CSRF defence for the
   forms and the API alike. The strict CSP is unchanged: no inline styles or
   scripts, and a test checks the account and admin pages for them.
@@ -336,10 +351,10 @@ devices at `/account`.
 
 **Deploying.** `compose.yaml` runs the one container with a named `data` volume
 at `/data` (`DB_PATH=/data/handwriting.db`; a daily `VACUUM INTO` backup lands
-in `/data/backups`, the last seven kept) and a 512 MB memory limit. Two
-environment variables depend on the proxy: `HSTS=1` once the site is served
-over https (never before: it pins the browser), and `CLIENT_IP_HEADER` so the
-per-IP sign-in limit sees visitors, not the proxy. Prefer a single-value header
+in `/data/backups`, the last seven kept) and a 512 MB memory limit. Set `HSTS=1`
+only once the site is served over HTTPS: it pins the browser to HTTPS. Set
+`CLIENT_IP_HEADER` only when the per-IP sign-in limit should consult a trusted
+proxy header for the visitor's address. Prefer a single-value header
 the proxy overwrites, such as `CF-Connecting-IP` (Cloudflare) or `X-Real-IP`.
 `X-Forwarded-For` also works, but only its rightmost entry (the one your own
 proxy appended) is trusted, because the client controls everything before it.
@@ -380,6 +395,11 @@ health check `/healthz`). Cloudflare terminates TLS, so Kamal runs with
 `proxy.ssl: false`. Nothing else can reach the app, which is what makes trusting
 `CF-Connecting-IP` safe. The app runs with a 512 MB limit and the existing
 `handwriting_data` volume at `/data`.
+
+The first deploy with `__Host-hp_session` signs web users out once; rollback to
+the bare cookie name does so again. The iPad token is unaffected. Browser sync
+turns off on the first 401 and offers to upload local history on the next
+sign-in; deletions still queued at sign-out are lost.
 
 ```sh
 make deploy                        # check gate, then kamal deploy (build, push to ghcr.io, swap in)
