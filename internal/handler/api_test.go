@@ -188,15 +188,43 @@ func TestSyncPaginates(t *testing.T) {
 	}
 }
 
+// apiProtectedCount is the exact number of protected API routes (POST
+// /api/token is the sign-in and public). The sweep's floor equals it.
+const apiProtectedCount = 3
+
 func TestAPIRefusesAnonymous(t *testing.T) {
 	s := newAccountServer(t)
-	for _, route := range []string{"GET /api/me", "POST /api/sync", "DELETE /api/token"} {
-		method, path, _ := strings.Cut(route, " ")
-		for _, token := range []string{"", "made-up"} {
-			rec := s.api(t, method, path, `{}`, token, "")
-			if rec.Status != http.StatusUnauthorized || !strings.Contains(rec.Body, `"error"`) {
-				t.Errorf("%s token=%q: %d %s", route, token, rec.Status, rec.Body)
-			}
+	var patterns []string
+	s.srv.registerAPI(func(pattern string, _ http.Handler) { patterns = append(patterns, pattern) })
+	routes := webtest.Routes(t, patterns, nil)
+	for i, r := range routes {
+		if r.Pattern == "POST /api/token" {
+			routes[i].Public, routes[i].Why = true, "the app's sign-in"
+		}
+	}
+	refused := func(_ webtest.Route, res *webtest.Response) error {
+		if res.Status != http.StatusUnauthorized || !strings.Contains(res.Body, `"error"`) {
+			return fmt.Errorf("want 401 with a JSON error; got %d %s", res.Status, res.Body)
+		}
+		return nil
+	}
+	swept := webtest.Sweep{
+		Routes: routes, Min: apiProtectedCount,
+		Client:  func() *webtest.Client { return plainClient(t, s.routes) },
+		NoToken: true,
+		Refused: refused,
+	}.Run(t)
+	if swept != apiProtectedCount {
+		t.Errorf("swept %d protected API routes, want %d", swept, apiProtectedCount)
+	}
+	// A made-up bearer token is refused the same way.
+	for _, route := range routes {
+		if route.Public {
+			continue
+		}
+		rec := s.api(t, route.Method, route.Path, `{}`, "made-up", "")
+		if err := refused(route, rec); err != nil {
+			t.Errorf("%s %s token=%q: %v", route.Method, route.Path, "made-up", err)
 		}
 	}
 }

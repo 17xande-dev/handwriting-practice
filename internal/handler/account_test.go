@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -317,6 +318,19 @@ func TestSignInRedirectStaysOnSite(t *testing.T) {
 			t.Errorf("next=%q: redirected to %q, want %q", next, loc, want)
 		}
 	}
+	// The kit's list of hostile spellings (tab, newline, encoded slashes, a
+	// path that normalises out of its prefix, an over-long path), checked on
+	// the raw Location rather than through a client that would parse it.
+	// Each runs on its own server: the sign-in limiter would otherwise
+	// refuse the later ones with a 429 before next is looked at.
+	for i, next := range webtest.HostileRedirects() {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			s := newAccountServer(t)
+			s.addUser(t, "a@x.com", false)
+			s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {testPassword}, "next": {next}}, "").
+				WantRedirect(http.StatusSeeOther, "/account")
+		})
+	}
 }
 
 func TestChangePassword(t *testing.T) {
@@ -371,46 +385,69 @@ func TestRevokeOtherSession(t *testing.T) {
 // publicRoutes are the only routes that answer someone not signed in. The
 // list is short and deliberate: adding a route anywhere means either adding
 // it here, with a reason, or protecting it.
-var publicRoutes = map[string]bool{
-	"GET /{$}": true, "GET /sheet/{slug}": true, "GET /progress": true, "GET /strokes": true, "GET /fonts": true,
-	"GET /practice/new": true, "POST /practice/new": true, "POST /practice": true, "GET /practice": true,
-	"GET /static/": true, "GET /favicon.ico": true, "GET /healthz": true,
-	"GET /account":         true, // the sign-in form
-	"POST /account/login":  true,
-	"POST /account/logout": true, // signing out with no session is a no-op
-	"POST /api/token":      true, // the app's sign-in
+var publicRoutes = map[string]string{
+	"GET /{$}": "the home page", "GET /sheet/{slug}": "worksheets", "GET /progress": "the progress page (data is local to the browser)",
+	"GET /strokes": "the stroke models page", "GET /fonts": "the fonts page",
+	"GET /practice/new": "the custom text form", "POST /practice/new": "the form, prefilled from the user's own text",
+	"POST /practice": "renders the user's own text; stores nothing", "GET /practice": "redirects to the form",
+	"GET /static/": "hashed assets", "GET /favicon.ico": "redirects to the icon", "GET /healthz": "the health check",
+	"GET /account":         "the sign-in form",
+	"POST /account/login":  "signing in",
+	"POST /account/logout": "signing out with no session is a no-op",
+	"POST /api/token":      "the app's sign-in",
 }
+
+// protectedRoutes is the exact number of registered routes that are not in
+// publicRoutes. The sweep's floor equals it, so a route that disappears fails
+// the test until this is lowered on purpose; a new one is swept and should
+// raise it.
+const protectedRoutes = 16
 
 // Every route is collected from routes() itself, so a route added later is
 // checked without anyone remembering to list it. Each is sent its own
-// method: a GET would meet a 405 at a POST route and prove nothing.
+// method: a GET would meet a 405 at a POST route and prove nothing. Each
+// attempt is a fresh anonymous client, then one holding a made-up session
+// cookie.
 func TestEveryRouteIsPublicOrProtected(t *testing.T) {
 	s := newAccountServer(t)
-	var all []string
-	s.srv.routes(func(pattern string, _ http.Handler) { all = append(all, pattern) })
-	if len(all) < 20 {
-		t.Fatalf("collected only %d routes", len(all))
+	var patterns []string
+	s.srv.routes(func(pattern string, _ http.Handler) { patterns = append(patterns, pattern) })
+	if len(patterns) < 20 {
+		t.Fatalf("collected only %d routes", len(patterns))
 	}
-	checked := 0
-	for _, pattern := range all {
-		if publicRoutes[pattern] {
-			continue
+	routes := webtest.Routes(t, patterns, map[string]string{"id": "1", "slug": "arches"})
+	for i, route := range routes {
+		if why, ok := publicRoutes[route.Pattern]; ok {
+			routes[i].Public, routes[i].Why = true, why
 		}
-		method, path, _ := strings.Cut(pattern, " ")
-		path = strings.NewReplacer("{id}", "1", "{$}", "").Replace(path)
-		for _, cookie := range []string{"", "made-up-token"} {
-			rec := s.do(t, method, path, url.Values{"current": {"x"}, "new": {"y"}, "confirm": {"y"}}, cookie)
-			loc := rec.Header.Get("Location")
-			refused := rec.Status == http.StatusUnauthorized ||
-				(rec.Status == http.StatusSeeOther && strings.HasPrefix(loc, "/account"))
-			if !refused {
-				t.Errorf("%s (cookie %q): %d %s", pattern, cookie, rec.Status, loc)
+	}
+	swept := webtest.Sweep{
+		Routes: routes, Min: protectedRoutes,
+		Client:  func() *webtest.Client { return plainClient(t, s.routes) },
+		Cookies: []*http.Cookie{{Name: s.srv.session.Name(), Value: "made-up-token", Path: "/"}},
+		NoToken: true,
+		Form:    url.Values{"current": {"x"}, "new": {"y"}, "confirm": {"y"}},
+		// Today's refusals, exactly: the JSON API answers 401; a page GET is
+		// sent to sign in and back (next=); a form POST goes to /account
+		// with no next.
+		Refused: func(route webtest.Route, res *webtest.Response) error {
+			switch {
+			case strings.HasPrefix(route.Path, "/api/"):
+				return webtest.Status(http.StatusUnauthorized)(route, res)
+			case route.Method == http.MethodGet:
+				return webtest.RedirectsTo("/account?next=%2F")(route, res)
 			}
-		}
-		checked++
-	}
-	if checked < 10 {
-		t.Fatalf("checked only %d protected routes", checked)
+			if err := webtest.RedirectsTo("/account")(route, res); err != nil {
+				return err
+			}
+			if loc := res.Location(); loc != "/account" {
+				return fmt.Errorf("want Location exactly /account; got %q", loc)
+			}
+			return nil
+		},
+	}.Run(t)
+	if swept != protectedRoutes {
+		t.Errorf("swept %d protected routes, want %d", swept, protectedRoutes)
 	}
 }
 

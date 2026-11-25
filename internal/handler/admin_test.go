@@ -8,22 +8,23 @@ import (
 	"testing"
 
 	"calligraphy/internal/auth"
+
+	"github.com/17xande-dev/websec/webtest"
 )
 
-// adminRoutes collects every admin route as "METHOD /path", with {id}
-// filled in, straight from registerAdmin.
-func adminRoutes(t *testing.T, s *testServer, id string) []string {
+// adminRoutes is every admin route straight from registerAdmin, as protected
+// routes with {id} filled in.
+func adminRoutes(t *testing.T, s *testServer, id string) []webtest.Route {
 	t.Helper()
-	var routes []string
-	s.srv.registerAdmin(func(pattern string, _ http.Handler) {
-		routes = append(routes, strings.NewReplacer("{id}", id, "{$}", "").Replace(pattern))
-	})
-	// A floor, so the sweep below cannot pass by checking nothing.
-	if len(routes) < 9 {
-		t.Fatalf("only %d admin routes registered", len(routes))
-	}
-	return routes
+	var patterns []string
+	s.srv.registerAdmin(func(pattern string, _ http.Handler) { patterns = append(patterns, pattern) })
+	return webtest.Routes(t, patterns, map[string]string{"id": id})
 }
+
+// adminRouteCount is the exact number of registered admin routes. The sweep's
+// floor equals it, so a route that disappears fails the test until this is
+// lowered on purpose; a new one is swept and should raise it.
+const adminRouteCount = 11
 
 // Every admin route, by its own method: a GET-only sweep would meet 405s on
 // the POST routes and prove nothing.
@@ -33,22 +34,28 @@ func TestAdminRoutesRefuseOthers(t *testing.T) {
 	member := s.addUser(t, "m@x.com", false)
 	cookie := s.signIn(t, "m@x.com", testPassword)
 	id := itoa(member.ID)
+	routes := adminRoutes(t, s, id)
 
-	for _, route := range adminRoutes(t, s, id) {
-		method, path, _ := strings.Cut(route, " ")
+	// Signed out: sent to sign in.
+	swept := webtest.Sweep{
+		Routes: routes, Min: adminRouteCount,
+		Client:  func() *webtest.Client { return plainClient(t, s.routes) },
+		NoToken: true,
+		Form:    url.Values{"email": {"new@x.com"}},
+		Refused: webtest.RedirectsTo("/account"),
+	}.Run(t)
+	if swept != adminRouteCount {
+		t.Errorf("swept %d admin routes, want %d", swept, adminRouteCount)
+	}
+	// Signed in without the role: a plain 404, as if nothing were there.
+	for _, route := range routes {
 		var form url.Values
-		if method == "POST" {
+		if route.Method == "POST" {
 			form = url.Values{"email": {"new@x.com"}}
 		}
-		// Signed out: sent to sign in.
-		rec := s.do(t, method, path, form, "")
-		if rec.Status != http.StatusSeeOther || !strings.HasPrefix(rec.Header.Get("Location"), "/account") {
-			t.Errorf("%s anonymous: %d %s", route, rec.Status, rec.Header.Get("Location"))
-		}
-		// Signed in without the role: a plain 404, as if nothing were there.
-		rec = s.do(t, method, path, form, cookie)
+		rec := s.do(t, route.Method, route.Path, form, cookie)
 		if rec.Status != http.StatusNotFound {
-			t.Errorf("%s as a member: %d, want 404", route, rec.Status)
+			t.Errorf("%s %s as a member: %d, want 404", route.Method, route.Path, rec.Status)
 		}
 	}
 	// None of it happened.

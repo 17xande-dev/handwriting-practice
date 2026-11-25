@@ -1,21 +1,20 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 
 	"calligraphy/internal/auth"
+
+	"github.com/17xande-dev/websec/webtest"
 )
 
 // The rules are websec's and tested there; this keeps one row per class at
@@ -212,45 +211,34 @@ func TestCanceledPasswordWaitIsNotBusy(t *testing.T) {
 	}
 }
 
-// logs captures what the server logs, so a test can check what is (and is
-// not) in it.
-type logBuf struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (l *logBuf) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.Write(p)
-}
-func (l *logBuf) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.String()
-}
-
 func TestFailedSignInsAndLimitsAreLoggedWithoutSecrets(t *testing.T) {
 	s := newAccountServer(t)
-	var lb logBuf
-	s.srv.log = slog.New(slog.NewTextHandler(&lb, nil))
+	log, logs := webtest.Logger(t)
+	s.srv.log = log
 	s.addUser(t, "a@x.com", false)
+	const longEmail = "someone.long@example.com" // NoSecrets needs at least 12 bytes
+	s.addUser(t, longEmail, false)
 	for range 6 {
 		s.do(t, "POST", "/account/login", url.Values{"email": {"a@x.com"}, "password": {"hunter2 hunter2 hunter2"}}, "")
 	}
-	out := lb.String()
+	s.do(t, "POST", "/account/login", url.Values{"email": {longEmail}, "password": {"hunter2 hunter2 hunter2"}}, "")
+	out := logs.String()
 	if !strings.Contains(out, "sign-in failed") || !strings.Contains(out, "sign-in rate limited") {
 		t.Fatalf("missing log lines:\n%s", out)
 	}
 	if !strings.Contains(out, emailTag("a@x.com")) || !strings.Contains(out, "192.0.2.1") {
 		t.Errorf("log lacks the email hash prefix or the client IP:\n%s", out)
 	}
+	// The short address and its plain check are kept; NoSecrets adds the
+	// encoded forms (base64, hex, escapes) for the password and the longer
+	// address, which meets its 12-byte minimum.
 	for _, secret := range []string{"hunter2", "a@x.com"} {
 		if strings.Contains(out, secret) {
 			t.Errorf("log contains %q:\n%s", secret, out)
 		}
 	}
-	if !regexp.MustCompile(`email=[0-9a-f]{12}\b`).MatchString(out) {
+	webtest.NoSecrets(t, out, "sign-in failed", "hunter2 hunter2 hunter2", longEmail)
+	if !regexp.MustCompile(`"email":"[0-9a-f]{12}"`).MatchString(out) {
 		t.Errorf("email is not a 12-hex tag:\n%s", out)
 	}
 }
