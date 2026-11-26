@@ -171,6 +171,8 @@ disagree, as with looped scripts; then the slider (−20° to 30°, since some
 hands lean back) sets it by eye. The chosen font and slant are remembered on
 the device.
 
+### Configuration
+
 | Setting | Default (server) | Purpose |
 |---|---|---|
 | `ADDR` | `:8080` | Listen address. `make run` uses `:8083`; `compose.local.yaml` publishes port 8083 by default. |
