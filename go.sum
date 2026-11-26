@@ -1,3 +1,5 @@
+github.com/17xande-dev/env v0.1.0 h1:eHn9RkJeQ9/Ccxbno5oNjUcocvJTINTMvp8pdcKoVvA=
+github.com/17xande-dev/env v0.1.0/go.mod h1:SOeje0cocSErZ7BjME29O0s8zIx1VrVSiuePDS8QdCg=
 github.com/17xande-dev/password v0.1.0 h1:ZjZJceKSnd5bZ5fPooKNLnngZU+K9c5hiPo4vSz1jok=
 github.com/17xande-dev/password v0.1.0/go.mod h1:k5baj87kSUM60Fg8e4jkx0MU7+4uPg1camTH2fysKNI=
 github.com/17xande-dev/ratelimit v0.2.0 h1:IK2xC0BwoYhZiQMQpUhmgAuRDwO/Apc8zDZ1ljUTMPg=

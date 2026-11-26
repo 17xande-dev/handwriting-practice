@@ -5,11 +5,12 @@ package config
 
 import (
 	"fmt"
-	"strings"
+	"os"
 	"time"
 
 	"calligraphy/internal/account"
 
+	"github.com/17xande-dev/env"
 	"github.com/17xande-dev/ratelimit/clientip"
 	"github.com/17xande-dev/websec/csrf"
 	"github.com/17xande-dev/websec/session"
@@ -58,45 +59,32 @@ type Config struct {
 	ClientIP clientip.Source
 }
 
-// Load reads configuration through getenv (os.Getenv in production, a map in
-// tests) and reports every invalid value at once rather than the first.
-func Load(getenv func(string) string) (Config, error) {
+// Load reads the process environment and reports every invalid setting at
+// once rather than the first.
+func Load() (Config, error) { return load(os.LookupEnv) }
+
+// load takes the lookup so tests can supply an environment without touching
+// the process's.
+func load(lookup env.Lookup) (Config, error) {
+	r := env.New(lookup)
 	c := Config{
-		Addr:            ":8080",
-		CookieSecure:    true,
-		ShutdownTimeout: 10 * time.Second,
+		Addr:            r.String("ADDR", ":8080"),
+		HSTS:            r.Bool("HSTS", false),
+		CookieSecure:    r.Bool("COOKIE_SECURE", true),
+		BaseURL:         r.String("BASE_URL", ""),
+		ShutdownTimeout: r.Duration("SHUTDOWN_TIMEOUT", 10*time.Second, time.Nanosecond, 0),
+		DBPath:          r.String("DB_PATH", ""),
+		ClientIPHeader:  r.String("CLIENT_IP_HEADER", ""),
 	}
-	var errs []string
-
-	if v := getenv("ADDR"); v != "" {
-		c.Addr = v
-	}
-
-	switch v := getenv("HSTS"); v {
-	case "", "0", "false":
-	case "1", "true":
-		c.HSTS = true
-	default:
-		errs = append(errs, fmt.Sprintf("HSTS: want 1/0/true/false, got %q", v))
-	}
-
-	switch v := getenv("COOKIE_SECURE"); v {
-	case "", "1", "true":
-	case "0", "false":
-		c.CookieSecure = false
-	default:
-		errs = append(errs, fmt.Sprintf("COOKIE_SECURE: want 1/0/true/false, got %q", v))
-	}
-
-	if c.BaseURL = getenv("BASE_URL"); c.BaseURL != "" {
+	if c.BaseURL != "" {
 		if err := csrf.ValidateOrigin(c.BaseURL, !c.CookieSecure); err != nil {
-			errs = append(errs, fmt.Sprintf("BASE_URL: %v", err))
+			r.Fail("BASE_URL", "must be a lower-case origin (scheme://host[:port]) matching COOKIE_SECURE, with no path or default port")
 		}
 	}
 
 	c.Lifetimes = account.DefaultLifetimes()
 	loadLifetime := func(prefix string, life *session.Lifetime) {
-		valid := true
+		before := fmt.Sprint(r.Err())
 		for _, entry := range []struct {
 			key string
 			dst *time.Duration
@@ -104,44 +92,31 @@ func Load(getenv func(string) string) (Config, error) {
 			{prefix + "_IDLE", &life.Idle},
 			{prefix + "_ABSOLUTE", &life.Absolute},
 		} {
-			if v := getenv(entry.key); v != "" {
-				d, err := time.ParseDuration(v)
-				if err != nil || d <= 0 || d%time.Second != 0 {
-					errs = append(errs, entry.key+": want a positive whole-second Go duration such as 720h")
-					valid = false
-				} else {
-					*entry.dst = d
-				}
+			// The one-second minimum keeps zero and negative values out; Duration
+			// accepts fractions, which the session library refuses.
+			*entry.dst = r.Duration(entry.key, *entry.dst, time.Second, 0)
+			if *entry.dst%time.Second != 0 {
+				r.Fail(entry.key, "want a positive whole-second Go duration such as 720h")
 			}
 		}
-		if valid {
+		// Only compare the two once both were readable.
+		if fmt.Sprint(r.Err()) == before {
 			if err := life.Validate(); err != nil {
-				errs = append(errs, fmt.Sprintf("%s_IDLE / %s_ABSOLUTE: %v", prefix, prefix, err))
+				r.Fail(prefix+"_IDLE / "+prefix+"_ABSOLUTE", "the idle limit must not exceed the absolute limit")
 			}
 		}
 	}
 	loadLifetime("SESSION", &c.Lifetimes.Web)
 	loadLifetime("DEVICE_SESSION", &c.Lifetimes.Device)
 
-	if v := getenv("SHUTDOWN_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d <= 0 {
-			errs = append(errs, fmt.Sprintf("SHUTDOWN_TIMEOUT: want a positive duration like 10s, got %q", v))
-		} else {
-			c.ShutdownTimeout = d
-		}
-	}
-
-	c.DBPath = getenv("DB_PATH")
-	c.ClientIPHeader = getenv("CLIENT_IP_HEADER")
 	if src, err := clientip.New(clientip.Config{TrustedHeader: c.ClientIPHeader}); err != nil {
-		errs = append(errs, fmt.Sprintf("CLIENT_IP_HEADER: %v", err))
+		r.Fail("CLIENT_IP_HEADER", "must be a valid header name")
 	} else {
 		c.ClientIP = src
 	}
 
-	if len(errs) > 0 {
-		return Config{}, fmt.Errorf("config: %s", strings.Join(errs, "; "))
+	if err := r.Err(); err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
 	}
 	return c, nil
 }

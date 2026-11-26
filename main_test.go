@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 func TestInvalidBaseURLStopsStartupBeforeDatabaseOpen(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "not-opened.db")
 	t.Setenv("BASE_URL", "http://app.example")
-	t.Setenv("COOKIE_SECURE", "1")
+	t.Setenv("COOKIE_SECURE", "true")
 	t.Setenv("DB_PATH", dbPath)
 	// If validation happens too late, do not leave the test listening.
 	t.Setenv("ADDR", "invalid-listen-address")
@@ -47,12 +47,8 @@ func TestInvalidBaseURLStopsStartupBeforeDatabaseOpen(t *testing.T) {
 
 func TestTrustedOriginSurvivesHostRewrite(t *testing.T) {
 	const publicOrigin = "https://practice.example"
-	cfg, err := config.Load(func(key string) string {
-		if key == "BASE_URL" {
-			return publicOrigin
-		}
-		return ""
-	})
+	t.Setenv("BASE_URL", publicOrigin)
+	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}

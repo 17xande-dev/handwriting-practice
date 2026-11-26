@@ -16,12 +16,8 @@ import (
 // what is tested.
 func serverFor(t *testing.T, header string) *testServer {
 	t.Helper()
-	cfg, err := config.Load(func(k string) string {
-		if k == "CLIENT_IP_HEADER" {
-			return header
-		}
-		return ""
-	})
+	t.Setenv("CLIENT_IP_HEADER", header)
+	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}

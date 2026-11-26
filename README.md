@@ -15,12 +15,12 @@ make run ADDR=0.0.0.0:8083    # reachable from an iPad on the same network
 Then open `http://<this machine's LAN IP>:8083` in Safari on the iPad. Pointer
 Events need no secure context, so plain HTTP on the LAN is fine for writing.
 Signing in uses Secure cookies by default. For a trusted plain-HTTP development
-network only, explicitly run with `COOKIE_SECURE=0`. Never use that setting on
-a public deployment. With the default `COOKIE_SECURE=1`, browsers accept the
+network only, explicitly run with `COOKIE_SECURE=false`. Never use that setting on
+a public deployment. With the default `COOKIE_SECURE=true`, browsers accept the
 cookie from `http://localhost` but not from a LAN address, and Safari has
 historically refused Secure cookies over `http://localhost` too (not rechecked
 on current versions), so `make run` may not sign in from Safari: use
-`COOKIE_SECURE=0` there.
+`COOKIE_SECURE=false` there.
 
 The server needs `DB_PATH`, a SQLite file for accounts and synced history;
 `make run` defaults it to `~/.local/share/handwriting/handwriting.db`
@@ -177,9 +177,9 @@ the device.
 |---|---|---|
 | `ADDR` | `:8080` | Listen address. `make run` uses `:8083`; `compose.local.yaml` publishes port 8083 by default. |
 | `DB_PATH` | Required | SQLite file for accounts and history. Compose uses `/data/handwriting.db`; `make run` sets the path shown above. |
-| `HSTS` | `0` | Set to `1` only for an HTTPS deployment. |
-| `COOKIE_SECURE` | `1` | Set to `0` only for trusted plain-HTTP development. The cookie policy never uses forwarded scheme headers. |
-| `BASE_URL` | Unset | Optional exact browser origin: lowercase `scheme://host[:port]`, no path, trailing slash, query, fragment, credentials, or default port. `http://` is only accepted with `COOKIE_SECURE=0`. A bad value stops startup before the database is opened. |
+| `HSTS` | `false` | Set to `true` only for an HTTPS deployment. |
+| `COOKIE_SECURE` | `true` | Set to `false` only for trusted plain-HTTP development. The cookie policy never uses forwarded scheme headers. |
+| `BASE_URL` | Unset | Optional exact browser origin: lowercase `scheme://host[:port]`, no path, trailing slash, query, fragment, credentials, or default port. `http://` is only accepted with `COOKIE_SECURE=false`. A bad value stops startup before the database is opened. |
 | `SESSION_IDLE` | `720h` (30 days) | Browser sign-in inactivity limit. |
 | `SESSION_ABSOLUTE` | `2160h` (90 days) | Maximum browser sign-in age, counted from sign-in. |
 | `DEVICE_SESSION_IDLE` | `2160h` (90 days) | iPad bearer token inactivity limit. |
@@ -191,10 +191,10 @@ Session limits are positive, whole-second Go durations (use hours for days,
 e.g. `720h` rather than `30d`). Neither idle limit may exceed its absolute
 limit. Invalid settings stop startup before opening or migrating the database.
 
-Nonempty boolean settings accept only `1`, `0`, `true`, and `false`. For plain-HTTP Compose
+Boolean settings accept exactly `true` or `false`; an empty value uses the default. For plain-HTTP Compose
 development, use `docker compose -f compose.yaml -f compose.local.yaml up --build`;
-the override sets `COOKIE_SECURE=0` by default. `.env.example` shows local
-settings; for a proxy-facing Compose deployment keep `COOKIE_SECURE=1` and use
+the override sets `COOKIE_SECURE=false` by default. `.env.example` shows local
+settings; for a proxy-facing Compose deployment keep `COOKIE_SECURE=true` and use
 the public HTTPS origin if you set `BASE_URL`.
 
 The Content-Security-Policy is built from the catalogue, plus Google Fonts'
@@ -350,7 +350,7 @@ devices at `/account`.
   applies to existing sessions using their original creation and last-use
   times; there is no database migration. The host-only, `HttpOnly`,
   `SameSite=Lax` browser cookie expires at the absolute deadline. Plain-HTTP
-  development with `COOKIE_SECURE=0` uses the unprefixed `hp_session`; the
+  development with `COOKIE_SECURE=false` uses the unprefixed `hp_session`; the
   iPad bearer token does not use either cookie.
 - **Cross-origin protection.** The whole site (including login, admin, the sync
   API and stateless practice forms) sits behind Go's `http.CrossOriginProtection`.
@@ -381,7 +381,7 @@ devices at `/account`.
 
 **Deploying.** `compose.yaml` runs the one container with a named `data` volume
 at `/data` (`DB_PATH=/data/handwriting.db`; a daily `VACUUM INTO` backup lands
-in `/data/backups`, the last seven kept) and a 512 MB memory limit. Set `HSTS=1`
+in `/data/backups`, the last seven kept) and a 512 MB memory limit. Set `HSTS=true`
 only once the site is served over HTTPS: it pins the browser to HTTPS. Set
 `CLIENT_IP_HEADER` only when the per-IP sign-in limit should consult a trusted
 proxy header for the visitor's address. Prefer a single-value header

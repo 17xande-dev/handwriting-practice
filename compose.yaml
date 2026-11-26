@@ -10,10 +10,10 @@ services:
       # keeps it; the image's /data is owned by the nonroot user it runs as.
       # Daily VACUUM INTO backups land beside it, in /data/backups.
       DB_PATH: /data/handwriting.db
-      # Set to 1 once the site is served over https (the reverse proxy's
+      # Set to true once the site is served over https (the reverse proxy's
       # certificate). Never over plain HTTP: it pins the browser to https.
-      HSTS: "${HSTS:-0}"
-      COOKIE_SECURE: "${COOKIE_SECURE:-1}"
+      HSTS: "${HSTS:-false}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-true}"
       BASE_URL: "${BASE_URL:-}"
       SESSION_IDLE: "${SESSION_IDLE:-720h}"
       SESSION_ABSOLUTE: "${SESSION_ABSOLUTE:-2160h}"
