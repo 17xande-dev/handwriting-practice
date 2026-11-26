@@ -37,7 +37,7 @@ func TestProductionValues(t *testing.T) {
 			"DEVICE_SESSION_ABSOLUTE": "8760h",
 			"CLIENT_IP_HEADER":        "CF-Connecting-IP",
 		},
-		"compose.yaml":                          compose,
+		"compose.yaml":                         compose,
 		"compose.yaml with compose.local.yaml": local,
 	} {
 		t.Run(name, func(t *testing.T) {
