@@ -171,6 +171,10 @@ disagree, as with looped scripts; then the slider (−20° to 30°, since some
 hands lean back) sets it by eye. The chosen font and slant are remembered on
 the device.
 
+The Content-Security-Policy is built from the catalogue, plus Google Fonts'
+two origins for the picker: `style-src` and `font-src` allow those and
+nothing else. `fonts.Validate` runs at startup.
+
 ### Configuration
 
 | Setting | Default (server) | Purpose |
@@ -196,10 +200,6 @@ development, use `docker compose -f compose.yaml -f compose.local.yaml up --buil
 the override sets `COOKIE_SECURE=false` by default. `.env.example` shows local
 settings; for a proxy-facing Compose deployment keep `COOKIE_SECURE=true` and use
 the public HTTPS origin if you set `BASE_URL`.
-
-The Content-Security-Policy is built from the catalogue, plus Google Fonts'
-two origins for the picker: `style-src` and `font-src` allow those and
-nothing else. `fonts.Validate` runs at startup.
 
 ### Check my writing
 
